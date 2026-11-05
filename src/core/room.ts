@@ -128,7 +128,7 @@ export class CerezRoom {
   private chatRate = new Map<string, number[]>()
   private pingTimer: number
   private wakeLock: WakeLockSentinel | null = null
-  /** Yalnız açık odada: vitrine ilan */
+  /** Yalnız açık odada: vitrine ilan (herkeste var, doluluğu en eski kişi ilan eder) */
   private lobby: LobbyAnnouncer | null = null
   private announceTimer = 0
   private announceDebounce = 0
@@ -243,7 +243,7 @@ export class CerezRoom {
     this.applyMicEnabled()
     this.pingTimer = window.setInterval(() => this.measurePings(), PING_INTERVAL_MS)
     if (opts.isPublic) {
-      this.lobby = new LobbyAnnouncer()
+      this.lobby = new LobbyAnnouncer(this.state.roomName)
       this.announceTimer = window.setInterval(() => this.announce(), ANNOUNCE_INTERVAL_MS)
       this.scheduleAnnounce()
     }
@@ -355,9 +355,7 @@ export class CerezRoom {
     if (!this.lobby || this.disposed) return
     const members = this.members().slice(0, MAX_ROOM_SIZE)
     if (members[0].id !== selfId) return
-    void this.lobby
-      .announce({ room: this.state.roomName, count: members.length, names: members.map((m) => m.name) })
-      .catch(() => {})
+    void this.lobby.announce(members.length, members.map((m) => m.name)).catch(() => {})
   }
 
   /** Ses paketleri: düşük bit hızı, yüksek ağ önceliği. Görüntü geldiğinde önce o düşer. */
@@ -697,9 +695,10 @@ export class CerezRoom {
     clearInterval(this.announceTimer)
     clearTimeout(this.announceDebounce)
     if (this.lobby) {
-      // Son kişi çıkıyorsa oda vitrinden hemen kalksın; değilse yeni en eski kişi ilanı sürdürür.
+      // Son kişi çıkıyorsa oda vitrinden hemen kalksın; değilse kalanlardan en eskisi ilanı sürdürür.
+      // Sayfa kapanırken de çalışması için bu blok, ilk await'ten önce kalmalı.
       if (reason === 'left' && !Object.values(this.state.peers).some((p) => p.known)) {
-        void this.lobby.announceEmpty(this.state.roomName)
+        this.lobby.leaveAsLast()
       } else {
         this.lobby.close()
       }

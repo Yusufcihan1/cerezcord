@@ -11,8 +11,8 @@ Aynı link hem PC tarayıcısında hem telefon tarayıcısında çalışır; tel
 - Odaya girmek için **oda adı + şifre** yeterli. Aynı ikisini giren herkes aynı odaya düşer.
 - **Açık odalar:** isteyen şifresiz bir açık oda kurar; oda "Açık odalar" listesinde adı, doluluğu
   (ör. 3/6) ve içindekilerin adlarıyla görünür, isteyen tıklayıp girer (`.../#/acik/oda-adi`).
-  Liste için sunucu yok: odadaki en eski kişi odayı 30 sn'de bir halka açık Nostr sunucularına ilan
-  eder (`src/core/lobby.ts`); ilanı yenilenmeyen oda ~75 sn içinde, son kişi çıkınca hemen listeden düşer.
+  Liste için sunucu yok: odadaki en eski kişi odayı 15 sn'de bir halka açık Nostr sunucularına ilan
+  eder (`src/core/lobby.ts`); son kişi çıkınca (sekmeyi kapatsa bile) oda hemen listeden düşer; tarayıcı çökerse ya da internet koparsa en geç ~40 sn içinde.
   Açık odalar şifreli odalardan ayrı bir ad alanındadır; aynı adlı şifreli odayla karışmaz.
   Ses yine doğrudan ve şifreli gider; oda adı ve içindekilerin adları ise herkese açıktır.
 

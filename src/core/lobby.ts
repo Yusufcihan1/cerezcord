@@ -3,7 +3,7 @@ import { MAX_ROOM_SIZE, ROOM_MAX_LENGTH } from './limits'
 import { cleanName, normalizeRoomName } from './protocol'
 
 // Açık oda vitrini. Sunucu yok: odadaki en eski kişi, odanın adını ve doluluğunu birkaç Nostr
-// sunucusuna 30 sn'de bir ilan eder. "Açık odalar" ekranı bu ilanları dinler. İlanlar kendiliğinden
+// sunucusuna 15 sn'de bir ilan eder. "Açık odalar" ekranı bu ilanları dinler. İlanlar kendiliğinden
 // eskir; ilanı yenilenmeyen oda listeden düşer. Herkes ilan atabildiği için içerik güvenilmez kabul
 // edilir ve sıkı doğrulanır.
 
@@ -21,11 +21,15 @@ const KIND = 30078
 const TOPIC = 'cerezcord-acik-v1'
 const D_PREFIX = 'cerezcord-acik:'
 
-export const ANNOUNCE_INTERVAL_MS = 30_000
-/** İki ilan kaçarsa oda listeden düşer */
-const STALE_MS = 75_000
+export const ANNOUNCE_INTERVAL_MS = 15_000
+/** İki ilan kaçarsa oda listeden düşer (sekme çöktüyse, internet koptuysa) */
+const STALE_MS = 40_000
 /** NIP-40: sunucular ilanı bu süre sonra silebilir */
-const EXPIRATION_S = 120
+const EXPIRATION_S = 60
+/** "Oda boşaldı" ilanı önceden imzalanır ve bu sıklıkla tazelenir; bkz. LobbyAnnouncer */
+const EMPTY_REFRESH_MS = 2_000
+/** Hazır "boşaldı" ilanının zamanı biraz ileri alınır ki son gerçek ilandan yeni sayılsın */
+const EMPTY_LEAD_S = 3
 
 // Vitrin ilanlarının saklanması gerektiği için, olayları saklayan bilinen sunucular kullanılır.
 // VITE_NOSTR_RELAYS verilirse (bkz. README) onlar kullanılır.
@@ -110,40 +114,60 @@ class RelayPool {
   }
 }
 
-/** Bir açık odanın ilanlarını gönderir. Oda içinde, yalnız en eski kişi kullanır. */
+/**
+ * Bir açık odanın ilanları. Odadaki herkeste bir tane bulunur; doluluğu yalnız en eski kişi ilan eder.
+ *
+ * Sekme kapanırken ya da pencere kapatılırken imza atmaya (eşzamansız) vakit kalmaz. Bu yüzden
+ * "oda boşaldı" ilanı önceden imzalanıp sürekli tazelenir; son kişi çıkarken bekletmeden gönderilir.
+ */
 export class LobbyAnnouncer {
   private key = schnorr.keygen()
   private pubkey = toHex(this.key.publicKey)
   private last: string | null = null
+  private empty: string | null = null
+  private emptyTimer: number
   private pool = new RelayPool(
     (ws) => this.last && ws.send(this.last),
     () => {},
   )
+  private room: string
 
-  async announce(info: Omit<PublicRoomInfo, 'updatedAt'>) {
-    const created_at = nowS()
+  constructor(room: string) {
+    this.room = room
+    const refresh = () => void this.sign(0, [], nowS() + EMPTY_LEAD_S).then((e) => (this.empty = e), () => {})
+    refresh()
+    this.emptyTimer = window.setInterval(refresh, EMPTY_REFRESH_MS)
+  }
+
+  private async sign(count: number, names: string[], created_at: number) {
     const tags = [
-      ['d', D_PREFIX + info.room],
+      ['d', D_PREFIX + this.room],
       ['t', TOPIC],
-      ['expiration', String(created_at + (info.count > 0 ? EXPIRATION_S : 10))],
+      ['expiration', String(created_at + (count > 0 ? EXPIRATION_S : 10))],
     ]
-    const content = JSON.stringify({ count: info.count, names: info.names })
+    const content = JSON.stringify({ count, names })
     const serialized = JSON.stringify([0, this.pubkey, created_at, KIND, tags, content])
     const id = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized)))
     const sig = await schnorr.signAsync(id, this.key.secretKey)
     const event = { id: toHex(id), pubkey: this.pubkey, created_at, kind: KIND, tags, content, sig: toHex(sig) }
-    this.last = JSON.stringify(['EVENT', event])
+    return JSON.stringify(['EVENT', event])
+  }
+
+  async announce(count: number, names: string[]) {
+    this.last = await this.sign(count, names, nowS())
     this.pool.broadcast(this.last)
   }
 
-  /** Son kişi çıkarken odayı vitrinden hemen kaldırır. */
-  async announceEmpty(room: string) {
-    await this.announce({ room, count: 0, names: [] }).catch(() => {})
-    // Gönderimin sokete yazılmasına fırsat ver.
+  /** Son kişi çıkıyor: odayı vitrinden hemen kaldır. Eşzamanlı; sayfa kapanırken de çalışır. */
+  leaveAsLast() {
+    if (this.empty) this.pool.broadcast(this.empty)
+    clearInterval(this.emptyTimer)
+    // Gönderimin sokete yazılmasına fırsat ver (sayfa kapanıyorsa zaten gider).
     window.setTimeout(() => this.pool.close(), 500)
   }
 
   close() {
+    clearInterval(this.emptyTimer)
     this.pool.close()
   }
 }
@@ -199,9 +223,10 @@ export function watchPublicRooms(onChange: (rooms: PublicRoomInfo[]) => void): (
       if (msg[0] !== 'EVENT' || msg[1] !== subId) return
       const info = parseEvent(msg[2])
       if (!info || info.updatedAt < Date.now() - STALE_MS) return
-      // Aynı oda için birden çok ilan varsa (ör. ilan eden kişi değişti) en yenisi geçerli.
+      // Aynı oda için birden çok ilan varsa (ör. ilan eden kişi değişti) en yenisi geçerli;
+      // aynı saniyedeyse "boşaldı" kazanır.
       const prev = rooms.get(info.room)
-      if (prev && prev.updatedAt >= info.updatedAt) return
+      if (prev && (prev.updatedAt > info.updatedAt || (prev.updatedAt === info.updatedAt && info.count > 0))) return
       rooms.set(info.room, info)
       emit()
     },
