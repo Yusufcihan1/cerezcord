@@ -4,13 +4,14 @@ import { loadSettings, saveSettings, type Settings } from './core/storage'
 import { JoinScreen, type JoinValues } from './ui/JoinScreen'
 import { RoomView } from './ui/RoomView'
 import { SettingsDialog } from './ui/SettingsDialog'
+import { roomHash } from './ui/util'
 
-/** "#/oda/kuzenler" biçimindeki linkten oda adını okur. */
+/** "#/oda/kuzenler" (şifreli) ya da "#/acik/kuzenler" (açık) biçimindeki linkten odayı okur. */
 function roomFromHash() {
-  const m = location.hash.match(/^#\/oda\/(.+)$/)
+  const m = location.hash.match(/^#\/(oda|acik)\/(.+)$/)
   if (!m) return null
   try {
-    return decodeURIComponent(m[1])
+    return { name: decodeURIComponent(m[2]), isPublic: m[1] === 'acik' }
   } catch {
     return null
   }
@@ -31,11 +32,11 @@ export default function App() {
   const join = async (v: JoinValues) => {
     setJoining(true)
     setEndMessage(null)
-    const next = { ...settings, name: v.name, lastRoom: v.roomName }
+    const next = { ...settings, name: v.name, lastRoom: v.roomName, lastRoomPublic: v.isPublic }
     updateSettings(next)
     try {
       const r = await CerezRoom.join({ ...v, settings: next })
-      history.replaceState(null, '', `#/oda/${encodeURIComponent(r.getState().roomName)}`)
+      history.replaceState(null, '', roomHash(r.getState().roomName, v.isPublic))
       setRoom(r)
     } catch (err) {
       console.error(err)
@@ -57,6 +58,8 @@ export default function App() {
     return () => window.removeEventListener('pagehide', onUnload)
   }, [room])
 
+  const hashRoom = roomFromHash()
+
   return (
     <>
       {room ? (
@@ -76,7 +79,8 @@ export default function App() {
       ) : (
         <JoinScreen
           initialName={settings.name}
-          initialRoom={roomFromHash() ?? settings.lastRoom}
+          initialRoom={hashRoom?.name ?? settings.lastRoom}
+          initialPublic={hashRoom?.isPublic ?? settings.lastRoomPublic}
           endMessage={endMessage}
           joining={joining}
           onJoin={join}

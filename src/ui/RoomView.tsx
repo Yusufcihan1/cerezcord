@@ -15,7 +15,7 @@ import {
   SendIcon,
   SettingsIcon,
 } from './icons'
-import { hue, initials, isTypingTarget, keyLabel, timeLabel } from './util'
+import { hue, initials, isTypingTarget, keyLabel, roomHash, timeLabel } from './util'
 
 type Props = {
   room: CerezRoom
@@ -38,7 +38,7 @@ export function RoomView({ room, settings, onOpenSettings, onLeave }: Props) {
   const unread = tab === 'chat' ? 0 : chatCount - seenChat
 
   const copyLink = async () => {
-    const url = `${location.origin}${location.pathname}#/oda/${encodeURIComponent(s.roomName)}`
+    const url = `${location.origin}${location.pathname}${roomHash(s.roomName, s.isPublic)}`
     try {
       if (isMobile && navigator.share) {
         await navigator.share({ title: 'Çerezcord', text: `"${s.roomName}" odasına gel`, url })
@@ -65,8 +65,15 @@ export function RoomView({ room, settings, onOpenSettings, onLeave }: Props) {
             {total}/{MAX_ROOM_SIZE} kişi
           </span>
         </div>
-        <span className="chip" title="Ses doğrudan kişiler arasında, şifreli gider">
-          <span className="dot" /> P2P · Şifreli
+        <span
+          className="chip"
+          title={
+            s.isPublic
+              ? 'Şifresiz oda: adını bilen herkes girebilir. Ses yine doğrudan ve şifreli gider.'
+              : 'Ses doğrudan kişiler arasında, şifreli gider'
+          }
+        >
+          <span className="dot" /> {s.isPublic ? 'P2P · Açık oda' : 'P2P · Şifreli'}
         </span>
         <button className="icon-btn" onClick={copyLink} title="Oda linkini paylaş" aria-label="Oda linkini paylaş">
           <LinkIcon />
@@ -112,7 +119,8 @@ export function RoomView({ room, settings, onOpenSettings, onLeave }: Props) {
           </div>
           {peers.length === 0 && (
             <p className="empty muted">
-              Odada şimdilik tek başınasın. Linki paylaş, arkadaşların aynı oda adı ve şifreyle girsin.
+              Odada şimdilik tek başınasın. Linki paylaş,{' '}
+              {s.isPublic ? 'arkadaşların linkle doğrudan girebilir.' : 'arkadaşların aynı oda adı ve şifreyle girsin.'}
             </p>
           )}
         </section>

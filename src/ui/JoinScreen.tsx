@@ -4,27 +4,30 @@ import { NAME_MAX_LENGTH, ROOM_MAX_LENGTH } from '../core/limits'
 import { cleanName } from '../core/protocol'
 import { CookieLogo } from './icons'
 
-export type JoinValues = { name: string; roomName: string; password: string }
+export type JoinValues = { name: string; roomName: string; password: string; isPublic: boolean }
 
 type Props = {
   initialName: string
   initialRoom: string
+  initialPublic: boolean
   endMessage: string | null
   joining: boolean
   onJoin: (v: JoinValues) => void
   onOpenSettings: () => void
 }
 
-export function JoinScreen({ initialName, initialRoom, endMessage, joining, onJoin, onOpenSettings }: Props) {
+export function JoinScreen({ initialName, initialRoom, initialPublic, endMessage, joining, onJoin, onOpenSettings }: Props) {
   const [name, setName] = useState(initialName)
   const [roomName, setRoomName] = useState(initialRoom)
   const [password, setPassword] = useState('')
+  const [isPublic, setIsPublic] = useState(initialPublic)
 
-  const valid = cleanName(name).length > 0 && roomName.trim().length > 0 && password.length >= 4
+  const valid =
+    cleanName(name).length > 0 && roomName.trim().length > 0 && (isPublic || password.length >= 4)
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (valid && !joining) onJoin({ name: cleanName(name), roomName: roomName.trim(), password })
+    if (valid && !joining) onJoin({ name: cleanName(name), roomName: roomName.trim(), password: isPublic ? '' : password, isPublic })
   }
 
   return (
@@ -52,6 +55,26 @@ export function JoinScreen({ initialName, initialRoom, endMessage, joining, onJo
             required
           />
         </label>
+        <div className="segmented" role="radiogroup" aria-label="Oda türü">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!isPublic}
+            className={!isPublic ? 'on' : ''}
+            onClick={() => setIsPublic(false)}
+          >
+            Şifreli oda
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={isPublic}
+            className={isPublic ? 'on' : ''}
+            onClick={() => setIsPublic(true)}
+          >
+            Açık oda
+          </button>
+        </div>
         <label>
           <span>Oda adı</span>
           <input
@@ -64,18 +87,24 @@ export function JoinScreen({ initialName, initialRoom, endMessage, joining, onJo
             required
           />
         </label>
-        <label>
-          <span>Oda şifresi</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            placeholder="en az 4 karakter"
-            required
-          />
-          <small className="muted">Aynı oda adı ve şifreyi giren herkes aynı odaya düşer.</small>
-        </label>
+        {isPublic ? (
+          <small className="muted">
+            Şifre yok: oda adını bilen herkes girebilir. Ses yine doğrudan ve şifreli gider.
+          </small>
+        ) : (
+          <label>
+            <span>Oda şifresi</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              placeholder="en az 4 karakter"
+              required
+            />
+            <small className="muted">Aynı oda adı ve şifreyi giren herkes aynı odaya düşer.</small>
+          </label>
+        )}
 
         <button className="primary big" type="submit" disabled={!valid || joining}>
           {joining ? 'Bağlanıyor…' : 'Odaya katıl'}

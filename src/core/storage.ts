@@ -38,6 +38,8 @@ export type VoiceMode = 'vad' | 'ptt'
 export type Settings = {
   name: string
   lastRoom: string
+  /** Son girilen oda açık (şifresiz) oda mıydı */
+  lastRoomPublic: boolean
   micDeviceId: string
   voiceMode: VoiceMode
   /** KeyboardEvent.code, ör. "KeyV" */
@@ -50,6 +52,7 @@ export type Settings = {
 export const defaultSettings: Settings = {
   name: '',
   lastRoom: '',
+  lastRoomPublic: false,
   micDeviceId: '',
   voiceMode: 'vad',
   pttKey: 'KeyV',

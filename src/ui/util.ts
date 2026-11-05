@@ -37,3 +37,7 @@ export function isTypingTarget(el: EventTarget | null) {
   if (!(el instanceof HTMLElement)) return false
   return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
 }
+
+/** Oda linkinin # kısmı: şifreli oda "#/oda/ad", açık oda "#/acik/ad". */
+export const roomHash = (roomName: string, isPublic: boolean) =>
+  `#/${isPublic ? 'acik' : 'oda'}/${encodeURIComponent(roomName)}`

@@ -9,6 +9,9 @@ Aynı link hem PC tarayıcısında hem telefon tarayıcısında çalışır; tel
 - Eşleşme (sinyalleşme) [Trystero](https://github.com/dmotz/trystero) ile halka açık Nostr sunucuları üzerinden yapılır.
   Oda şifresi bu mesajları da şifreler.
 - Odaya girmek için **oda adı + şifre** yeterli. Aynı ikisini giren herkes aynı odaya düşer.
+- **Açık oda** seçilirse şifre gerekmez: oda adını bilen herkes girer (`.../#/acik/oda-adi`).
+  Açık odalar şifreli odalardan ayrı bir ad alanındadır; aynı adlı şifreli odayla karışmaz.
+  Ses yine doğrudan ve şifreli gider, yalnız eşleşme mesajları şifrelenmez.
 
 ## Özellikler (Aşama 1)
 
@@ -54,7 +57,7 @@ VITE_NOSTR_RELAYS="wss://relay1.ornek.com,wss://relay2.ornek.com" npm run build
 1. Bu klasörü bir GitHub deposuna gönderin (`main` dalı).
 2. Depo → **Settings → Pages → Source: GitHub Actions** seçin.
 3. Her `main` gönderiminde `.github/workflows/deploy.yml` otomatik yayınlar.
-4. Link: `https://<kullanıcı>.github.io/<depo>/` — oda linki: `.../#/oda/kuzenler`
+4. Link: `https://<kullanıcı>.github.io/<depo>/` — oda linki: `.../#/oda/kuzenler`, açık oda: `.../#/acik/kuzenler`
 
 ## Yol haritası
 

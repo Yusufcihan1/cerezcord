@@ -2,6 +2,9 @@
 
 export const APP_ID = 'cerezcord-v1'
 
+/** Açık (şifresiz) odalar ayrı bir ad alanında; aynı adlı şifreli odayla karışmaz. */
+export const PUBLIC_APP_ID = 'cerezcord-v1-acik'
+
 /** Oda başına en fazla kişi (kendin dahil). 6 kişi = 15 P2P bağlantı. */
 export const MAX_ROOM_SIZE = 6
 

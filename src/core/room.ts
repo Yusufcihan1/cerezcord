@@ -3,6 +3,7 @@ import { AudioEngine, LOCAL } from './audio'
 import { deviceKind, type DeviceKind } from './device'
 import {
   APP_ID,
+  PUBLIC_APP_ID,
   AUDIO_MAX_BITRATE,
   CHAT_HISTORY_LIMIT,
   CHAT_MAX_LENGTH,
@@ -42,6 +43,8 @@ export type RoomStatus = 'live' | 'full' | 'left'
 export type RoomState = {
   status: RoomStatus
   roomName: string
+  /** Şifresiz, oda adını bilen herkesin girebildiği oda */
+  isPublic: boolean
   selfId: string
   name: string
   muted: boolean
@@ -58,7 +61,9 @@ export type RoomState = {
 
 export type JoinOptions = {
   roomName: string
+  /** Açık odada boş kalır */
   password: string
+  isPublic: boolean
   name: string
   settings: Settings
 }
@@ -118,6 +123,7 @@ export class CerezRoom {
     this.state = {
       status: 'live',
       roomName: normalizeRoomName(opts.roomName),
+      isPublic: opts.isPublic,
       selfId,
       name: opts.name,
       muted: false,
@@ -151,8 +157,9 @@ export class CerezRoom {
 
     this.room = joinRoom(
       {
-        appId: APP_ID,
-        password: opts.password,
+        appId: opts.isPublic ? PUBLIC_APP_ID : APP_ID,
+        // Açık odada sinyal mesajları şifrelenmez; ses yine de WebRTC ile (DTLS-SRTP) şifreli gider.
+        password: opts.isPublic ? undefined : opts.password,
         turnConfig,
         relayConfig: relayUrls?.length ? { urls: relayUrls, redundancy: relayUrls.length } : undefined,
       },
