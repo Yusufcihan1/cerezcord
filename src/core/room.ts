@@ -1,4 +1,4 @@
-import { joinRoom, selfId, type JsonValue, type Room } from 'trystero/nostr'
+import { joinRoom, selfId, type JsonValue, type MessageAction, type Room } from 'trystero/nostr'
 import { AudioEngine, LOCAL } from './audio'
 import { deviceKind, type DeviceKind } from './device'
 import {
@@ -9,6 +9,11 @@ import {
   CHAT_MAX_LENGTH,
   CHAT_RATE_MAX,
   CHAT_RATE_WINDOW_MS,
+  FILE_INCOMING_MAX,
+  FILE_MAX_BYTES,
+  FILE_NAME_MAX_LENGTH,
+  FILE_RATE_MAX,
+  FILE_RATE_WINDOW_MS,
   MAX_ROOM_SIZE,
   PING_INTERVAL_MS,
 } from './limits'
@@ -30,6 +35,18 @@ export type PeerInfo = {
   volume: number
 }
 
+export type ChatFile = {
+  name: string
+  size: number
+  /** Önizleme yalnız güvenli resim türlerinde yapılır */
+  isImage: boolean
+  status: 'sending' | 'receiving' | 'done' | 'failed'
+  /** 0..1 */
+  progress: number
+  /** Tamamlanınca: indirme/önizleme adresi (bellekte, odadan çıkınca silinir) */
+  url: string | null
+}
+
 export type ChatEntry = {
   id: string
   kind: 'message' | 'system'
@@ -37,6 +54,24 @@ export type ChatEntry = {
   name: string
   text: string
   ts: number
+  file?: ChatFile
+}
+
+/** SVG gibi betik taşıyabilen türler önizlenmez, yalnız indirilir. */
+const PREVIEW_MIME = /^image\/(png|jpeg|gif|webp|avif)$/
+
+const cleanFileName = (name: string) =>
+  // oxlint-disable-next-line no-control-regex
+  name.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(-FILE_NAME_MAX_LENGTH) || 'dosya'
+
+type FileMeta = { id: string; name: string; size: number; mime: string }
+
+function parseFileMeta(raw: unknown): FileMeta | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const m = raw as Record<string, unknown>
+  if (typeof m.id !== 'string' || typeof m.name !== 'string' || typeof m.size !== 'number' || typeof m.mime !== 'string')
+    return null
+  return { id: m.id.slice(0, 40), name: cleanFileName(m.name), size: m.size, mime: m.mime.slice(0, 100) }
 }
 
 export type RoomStatus = 'live' | 'full' | 'left'
@@ -78,6 +113,12 @@ export const SELF = LOCAL
 export class CerezRoom {
   private room: Room
   private send: (msg: Msg, target?: string) => void
+  private fileAction: MessageAction<Blob>
+  private fileRate = new Map<string, number[]>()
+  /** Süren gelen aktarımlar: dosya (sohbet kaydı) id'si -> gönderen */
+  private incomingFiles = new Map<string, string>()
+  /** Giden dosyalar sırayla gider; biri bitmeden sıradaki başlamaz. */
+  private sendQueue: Promise<void> = Promise.resolve()
   private audio: AudioEngine
   private mic: MediaStream | null = null
   private state: RoomState
@@ -163,6 +204,8 @@ export class CerezRoom {
         password: opts.isPublic ? undefined : opts.password,
         turnConfig,
         relayConfig: relayUrls?.length ? { urls: relayUrls, redundancy: relayUrls.length } : undefined,
+        // Sınırın üstünde veri belleğe hiç alınmaz.
+        maxReceiveBytes: FILE_MAX_BYTES + 64 * 1024,
       },
       this.state.roomName,
       {
@@ -180,6 +223,15 @@ export class CerezRoom {
       onMessage: (data, { peerId }) => this.onMessage(peerId, data),
     })
     this.send = (msg, target) => void action.send(msg as unknown as JsonValue, target ? { target } : undefined).catch(() => {})
+
+    this.fileAction = this.room.makeAction<Blob>('file', {
+      onReceive: (ctx) => this.acceptFile(ctx.peerId, ctx.byteLength, ctx.metadata),
+      onReceiveProgress: (p, { peerId, metadata }) => {
+        const id = parseFileMeta(metadata)?.id
+        if (id && this.incomingFiles.get(id) === peerId) this.patchFile(id, { progress: p })
+      },
+      onMessage: (data, { peerId, metadata }) => this.onFile(peerId, data, metadata),
+    })
 
     this.room.onPeerJoin = (id) => this.onPeerJoin(id)
     this.room.onPeerLeave = (id) => this.onPeerLeave(id)
@@ -265,6 +317,12 @@ export class CerezRoom {
     const peer = this.state.peers[id]
     this.audio.remove(id)
     this.chatRate.delete(id)
+    this.fileRate.delete(id)
+    for (const [fileId, from] of this.incomingFiles) {
+      if (from !== id) continue
+      this.incomingFiles.delete(fileId)
+      this.patchFile(fileId, { status: 'failed' })
+    }
     if (!peer) return
     const peers = { ...this.state.peers }
     delete peers[id]
@@ -491,7 +549,118 @@ export class CerezRoom {
   }
 
   private pushChat(entry: ChatEntry) {
-    this.set({ chat: [...this.state.chat, entry].slice(-CHAT_HISTORY_LIMIT) })
+    const chat = [...this.state.chat, entry]
+    // Listeden düşen dosyaların belleği de bırakılır.
+    for (const old of chat.slice(0, -CHAT_HISTORY_LIMIT)) if (old.file?.url) URL.revokeObjectURL(old.file.url)
+    this.set({ chat: chat.slice(-CHAT_HISTORY_LIMIT) })
+  }
+
+  // ---------- dosya ----------
+
+  private patchFile(id: string, patch: Partial<ChatFile>) {
+    this.set({
+      chat: this.state.chat.map((c) => (c.id === id && c.file ? { ...c, file: { ...c.file, ...patch } } : c)),
+    })
+  }
+
+  private allowFile(id: string) {
+    const now = Date.now()
+    const recent = (this.fileRate.get(id) ?? []).filter((t) => now - t < FILE_RATE_WINDOW_MS)
+    if (recent.length >= FILE_RATE_MAX) return false
+    recent.push(now)
+    this.fileRate.set(id, recent)
+    return true
+  }
+
+  /** Aktarım başlamadan önce: kişi, boyut ve sıklık kontrolü. false dönerse veri hiç gelmez. */
+  private acceptFile(peerId: string, byteLength: number, rawMeta: unknown) {
+    const peer = this.state.peers[peerId]
+    const meta = parseFileMeta(rawMeta)
+    if (!peer?.known || !meta || this.disposed) return false
+    const active = [...this.incomingFiles.values()].filter((from) => from === peerId).length
+    if (byteLength > FILE_MAX_BYTES || active >= FILE_INCOMING_MAX || this.incomingFiles.has(meta.id)) return false
+    if (this.state.chat.some((c) => c.id === meta.id) || !this.allowFile(peerId)) return false
+    this.incomingFiles.set(meta.id, peerId)
+    this.pushChat({
+      id: meta.id,
+      kind: 'message',
+      fromId: peerId,
+      name: peer.name,
+      text: '',
+      ts: Date.now(),
+      file: {
+        name: meta.name,
+        size: byteLength,
+        isImage: PREVIEW_MIME.test(meta.mime),
+        status: 'receiving',
+        progress: 0,
+        url: null,
+      },
+    })
+    return true
+  }
+
+  private onFile(peerId: string, data: Blob, rawMeta: unknown) {
+    const meta = parseFileMeta(rawMeta)
+    if (!meta || this.incomingFiles.get(meta.id) !== peerId || this.disposed) return
+    const id = meta.id
+    this.incomingFiles.delete(id)
+    // Tür yalnız önizleme için kullanılır; diğer her şey ikili dosya olarak iner.
+    const type = PREVIEW_MIME.test(meta.mime) ? meta.mime : 'application/octet-stream'
+    const blob = new Blob([data as BlobPart], { type })
+    this.patchFile(id, { status: 'done', progress: 1, url: URL.createObjectURL(blob) })
+  }
+
+  /** Hata metni döner; null ise gönderim başladı. */
+  sendFile(file: File): string | null {
+    if (file.size === 0) return 'Boş dosya gönderilemez.'
+    if (file.size > FILE_MAX_BYTES) return `Dosya çok büyük: en fazla ${Math.round(FILE_MAX_BYTES / 1024 ** 2)} MB.`
+    const targets = Object.values(this.state.peers)
+      .filter((p) => p.known)
+      .map((p) => p.id)
+    if (targets.length === 0) return 'Odada senden başka kimse yok.'
+    if (!this.allowFile(selfId)) return 'Çok sık dosya gönderiyorsun, biraz bekle.'
+
+    const id = crypto.randomUUID()
+    const meta: FileMeta = { id, name: cleanFileName(file.name), size: file.size, mime: file.type }
+    const isImage = PREVIEW_MIME.test(file.type)
+    this.pushChat({
+      id,
+      kind: 'message',
+      fromId: selfId,
+      name: this.state.name,
+      text: '',
+      ts: Date.now(),
+      file: {
+        name: meta.name,
+        size: file.size,
+        isImage,
+        status: 'sending',
+        progress: 0,
+        url: URL.createObjectURL(file),
+      },
+    })
+
+    this.sendQueue = this.sendQueue.then(async () => {
+      let ok = 0
+      // Kişilere sırayla: aynı anda herkese yüklemek, gönderenin sesini boğar.
+      for (const [i, target] of targets.entries()) {
+        if (this.disposed) return
+        if (!this.state.peers[target]) continue
+        try {
+          await this.fileAction.send(file, {
+            target,
+            metadata: meta,
+            onProgress: (p) => this.patchFile(id, { progress: (i + p) / targets.length }),
+          })
+          ok++
+        } catch {
+          /* bu kişi reddetti ya da ayrıldı; sıradakine geç */
+        }
+      }
+      this.patchFile(id, { status: ok > 0 ? 'done' : 'failed', progress: 1 })
+    })
+    return null
   }
 
   private pushSystem(text: string) {
@@ -539,6 +708,7 @@ export class CerezRoom {
     void this.wakeLock?.release().catch(() => {})
     for (const t of this.mic?.getTracks() ?? []) t.stop()
     this.audio.close()
+    for (const c of this.state.chat) if (c.file?.url) URL.revokeObjectURL(c.file.url)
     await this.room.leave().catch(() => {})
     this.set({ status: reason })
   }

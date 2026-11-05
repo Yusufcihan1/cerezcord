@@ -18,6 +18,18 @@ export const CHAT_HISTORY_LIMIT = 200
 export const CHAT_RATE_WINDOW_MS = 5_000
 export const CHAT_RATE_MAX = 5
 
+/**
+ * Dosya paylaşımı. Sunucu yok: gönderen dosyayı her kişiye ayrı ayrı yükler, bu yüzden boyut sınırlı
+ * ve kişilere sırayla gönderilir (aynı anda değil), ses takılmasın.
+ */
+export const FILE_MAX_BYTES = 25 * 1024 ** 2
+/** Kişi başı: bu süre içinde en fazla bu kadar dosya */
+export const FILE_RATE_WINDOW_MS = 60_000
+export const FILE_RATE_MAX = 5
+/** Bir kişiden aynı anda gelebilecek dosya sayısı */
+export const FILE_INCOMING_MAX = 3
+export const FILE_NAME_MAX_LENGTH = 120
+
 /** İsim ve oda adı */
 export const NAME_MAX_LENGTH = 24
 export const ROOM_MAX_LENGTH = 32

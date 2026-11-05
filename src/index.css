@@ -662,6 +662,74 @@ input::placeholder {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.chat.dragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+.file-card {
+  margin-top: 0.3rem;
+  display: grid;
+  gap: 0.4rem;
+  max-width: 320px;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  background: #0d0d0d;
+}
+.file-card.failed {
+  border-color: rgb(255 77 77 / 0.5);
+}
+.file-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.file-row svg {
+  flex: none;
+  color: var(--muted);
+}
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+.file-status {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.file-card.failed .file-status {
+  color: var(--red);
+}
+.file-download {
+  flex: none;
+  font: 600 0.72rem var(--mono);
+  text-transform: uppercase;
+  color: var(--accent);
+  text-decoration: none;
+}
+.file-download:hover {
+  color: var(--accent-hi);
+}
+.file-progress {
+  height: 3px;
+  background: var(--line-strong);
+}
+.file-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
 .chat-warn {
   margin: 0;
   padding: 0 1rem 0.35rem;

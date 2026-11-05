@@ -29,6 +29,12 @@ export function keyLabel(code: string) {
   return map[code] ?? code
 }
 
+export function sizeLabel(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 ** 2).toLocaleString('tr-TR', { maximumFractionDigits: 1 })} MB`
+}
+
 export function timeLabel(ts: number) {
   return new Date(ts).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
 }

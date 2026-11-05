@@ -1,21 +1,32 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ClipboardEvent,
+  type CSSProperties,
+  type DragEvent,
+  type FormEvent,
+} from 'react'
 import { isMobile } from '../core/device'
-import { CHAT_MAX_LENGTH, MAX_ROOM_SIZE, VOLUME_MAX, VOLUME_MIN } from '../core/limits'
-import { SELF, type CerezRoom, type PeerInfo, type RoomState } from '../core/room'
+import { CHAT_MAX_LENGTH, FILE_MAX_BYTES, MAX_ROOM_SIZE, VOLUME_MAX, VOLUME_MIN } from '../core/limits'
+import { SELF, type CerezRoom, type ChatEntry, type PeerInfo, type RoomState } from '../core/room'
 import type { Settings } from '../core/storage'
 import {
   CookieLogo,
+  FileIcon,
   HeadphonesIcon,
   HeadphonesOffIcon,
   LeaveIcon,
   LinkIcon,
   MicIcon,
   MicOffIcon,
+  PaperclipIcon,
   PhoneIcon,
   SendIcon,
   SettingsIcon,
 } from './icons'
-import { hue, initials, isTypingTarget, keyLabel, roomHash, timeLabel } from './util'
+import { hue, initials, isTypingTarget, keyLabel, roomHash, sizeLabel, timeLabel } from './util'
 
 type Props = {
   room: CerezRoom
@@ -281,8 +292,33 @@ function usePttKeyboard(room: CerezRoom, enabled: boolean, code: string) {
 function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
   const [text, setText] = useState('')
   const [warn, setWarn] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLOListElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const stick = useRef(true)
+
+  const sendFiles = (files: Iterable<File>) => {
+    for (const f of files) {
+      const err = room.sendFile(f)
+      setWarn(err)
+      if (err) break
+      stick.current = true
+    }
+  }
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    sendFiles(e.dataTransfer.files)
+  }
+
+  // Panodan yapıştırılan ekran görüntüsü de dosya olarak gider.
+  const onPaste = (e: ClipboardEvent) => {
+    const files = [...e.clipboardData.files]
+    if (files.length === 0) return
+    e.preventDefault()
+    sendFiles(files)
+  }
 
   useEffect(() => {
     const el = listRef.current
@@ -302,7 +338,18 @@ function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
   }
 
   return (
-    <aside className="chat">
+    <aside
+      className={`chat ${dragging ? 'dragging' : ''}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        e.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+      }}
+      onDrop={onDrop}
+    >
       <ol
         className="messages"
         ref={listRef}
@@ -311,7 +358,9 @@ function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
         }}
       >
-        {s.chat.length === 0 && <li className="system muted">Mesajlar kaydedilmez; odadan çıkınca silinir.</li>}
+        {s.chat.length === 0 && (
+          <li className="system muted">Mesajlar ve dosyalar kaydedilmez; odadan çıkınca silinir.</li>
+        )}
         {s.chat.map((m) =>
           m.kind === 'system' ? (
             <li key={m.id} className="system muted">
@@ -323,7 +372,7 @@ function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
                 <strong style={{ color: `hsl(${hue(m.name)} 70% 68%)` }}>{m.name}</strong>
                 <time className="muted mono">{timeLabel(m.ts)}</time>
               </div>
-              <p>{m.text}</p>
+              {m.file ? <FileCard file={m.file} /> : <p>{m.text}</p>}
             </li>
           ),
         )}
@@ -331,6 +380,26 @@ function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
       {warn && <p className="chat-warn">{warn}</p>}
       <form className="composer" onSubmit={submit}>
         <input
+          ref={fileRef}
+          type="file"
+          hidden
+          multiple
+          onChange={(e) => {
+            sendFiles(e.target.files ?? [])
+            e.target.value = ''
+          }}
+        />
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Dosya gönder"
+          title={`Dosya gönder (en fazla ${Math.round(FILE_MAX_BYTES / 1024 ** 2)} MB)`}
+          onClick={() => fileRef.current?.click()}
+        >
+          <PaperclipIcon />
+        </button>
+        <input
+          onPaste={onPaste}
           value={text}
           onChange={(e) => setText(e.target.value)}
           maxLength={CHAT_MAX_LENGTH}
@@ -343,5 +412,44 @@ function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
         </button>
       </form>
     </aside>
+  )
+}
+
+function FileCard({ file }: { file: NonNullable<ChatEntry['file']> }) {
+  const busy = file.status === 'sending' || file.status === 'receiving'
+  const pct = Math.round(file.progress * 100)
+  const statusText =
+    file.status === 'sending'
+      ? `Gönderiliyor %${pct}`
+      : file.status === 'receiving'
+        ? `Alınıyor %${pct}`
+        : file.status === 'failed'
+          ? 'Aktarılamadı'
+          : sizeLabel(file.size)
+  return (
+    <div className={`file-card ${file.status}`}>
+      {file.isImage && file.url && file.status !== 'failed' && (
+        <a href={file.url} download={file.name} className="file-preview" title="İndir">
+          <img src={file.url} alt={file.name} />
+        </a>
+      )}
+      <div className="file-row">
+        <FileIcon width={18} height={18} />
+        <span className="file-name" title={file.name}>
+          {file.name}
+        </span>
+        <span className="file-status mono">{statusText}</span>
+        {file.url && file.status === 'done' && (
+          <a className="file-download" href={file.url} download={file.name}>
+            İndir
+          </a>
+        )}
+      </div>
+      {busy && (
+        <div className="file-progress" aria-hidden>
+          <i style={{ width: `${pct}%` }} />
+        </div>
+      )}
+    </div>
   )
 }

@@ -69,6 +69,19 @@ export const SendIcon = (p: P) => (
   </svg>
 )
 
+export const PaperclipIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" />
+  </svg>
+)
+
+export const FileIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <path d="M14 2v6h6" />
+  </svg>
+)
+
 export const PhoneIcon = (p: P) => (
   <svg {...base(p)}>
     <rect x="6" y="2" width="12" height="20" rx="2" />

@@ -22,6 +22,8 @@ Aynı link hem PC tarayıcısında hem telefon tarayıcısında çalışır; tel
 - Mikrofon kapat / sağır ol, kişi başı ses seviyesi (%0–200, isimle hatırlanır)
 - Konuşma modu: **sesle açılır** veya **bas-konuş** (PC'de tuş, telefonda basılı tutulan düğme)
 - Yazılı sohbet (kaydedilmez; odadan çıkınca silinir)
+- Sohbette dosya paylaşımı: ataç düğmesi, sürükle-bırak veya yapıştır. Resimler önizlenir, diğer dosyalar
+  "İndir" ile iner. Dosyalar sunucuya gitmez, kişiler arasında doğrudan gider ve odadan çıkınca silinir.
 - Telefon: ekran açık kalır (Wake Lock), sekme arka plandan dönünce ses toparlanır
 - Mikrofon yoksa/izin verilmezse dinleyici olarak katılma
 - İsteğe bağlı TURN sunucusu ayarı (CGNAT arkasındakiler için)
@@ -35,6 +37,7 @@ Hepsi `src/core/limits.ts` içinde:
 | Oda başına kişi | 6 (fazlası kendiliğinden "Oda dolu" ile çıkar) |
 | Ses bit hızı | 32 kbps, yüksek ağ önceliği |
 | Sohbet | 500 karakter, kişi başı 5 sn'de en fazla 5 mesaj, son 200 mesaj |
+| Dosya | en fazla 25 MB, kişi başı dakikada 5 dosya; kişilere sırayla gönderilir (ses takılmasın) |
 
 ## Geliştirme
 
