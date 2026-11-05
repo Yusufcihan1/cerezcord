@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { desktop } from '../core/desktop'
 import { isMobile } from '../core/device'
 import { listMicrophones } from '../core/media'
 import type { CerezRoom } from '../core/room'
@@ -106,8 +107,9 @@ export function SettingsDialog({ settings, room, onChange, onClose }: Props) {
           ))}
         {settings.voiceMode === 'ptt' && !isMobile && (
           <small className="muted">
-            Tarayıcıda tuş yalnızca Çerezcord sekmesi öndeyken çalışır. Oyun öndeyken çalışması için masaüstü sürümü
-            (Aşama 3) gerekecek.
+            {desktop
+              ? 'Masaüstü uygulamasında tuş, oyun öndeyken de çalışır.'
+              : 'Tarayıcıda tuş yalnızca Çerezcord sekmesi öndeyken çalışır. Oyun öndeyken çalışması için masaüstü uygulamasını kullan.'}
           </small>
         )}
       </section>

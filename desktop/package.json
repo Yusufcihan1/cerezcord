@@ -1,0 +1,60 @@
+{
+  "name": "cerezcord-desktop",
+  "productName": "Çerezcord",
+  "version": "1.0.0",
+  "description": "Çerezcord masaüstü uygulaması",
+  "author": "Yusufcihan1",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "io.github.yusufcihan1.cerezcord",
+    "productName": "Çerezcord",
+    "executableName": "Cerezcord",
+    "artifactName": "Cerezcord-Kurulum-${version}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Çerezcord",
+      "uninstallDisplayName": "Çerezcord",
+      "language": "1055"
+    }
+  }
+}

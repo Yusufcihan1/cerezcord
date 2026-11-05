@@ -65,7 +65,24 @@ VITE_NOSTR_RELAYS="wss://relay1.ornek.com,wss://relay2.ornek.com" npm run build
 3. Her `main` gönderiminde `.github/workflows/deploy.yml` otomatik yayınlar.
 4. Link: `https://<kullanıcı>.github.io/<depo>/` — oda linki: `.../#/oda/kuzenler`, açık oda: `.../#/acik/kuzenler`
 
+## Masaüstü uygulaması (Windows)
+
+`desktop/` klasöründe Electron kabuğu var. Uygulama yayındaki web sürümünü açar
+(`https://yusufcihan1.github.io/cerezcord/`), yani tarayıcıdakilerle aynı odalara bağlanır ve web
+güncellendikçe kendiliğinden güncel kalır. Tarayıcıdan tek farkı: **bas-konuş tuşu oyun öndeyken de çalışır**
+(`uiohook-napi` ile genel klavye dinleme; yalnız seçilen tuşa bakılır, pencere öndeyken tuşu sayfa dinler).
+
+```bash
+cd desktop
+npm install
+npm start          # geliştirme
+npm run dist       # dist/Cerezcord-Kurulum-<sürüm>.exe
+```
+
+Exe imzasız olduğu için Windows ilk açılışta "Windows kişisel bilgisayarınızı korudu" diyebilir:
+**Ek bilgi → Yine de çalıştır**.
+
 ## Yol haritası
 
 - **Aşama 2:** kamera, ekran paylaşımı (tek yayıncı, "İzle" ile abonelik), upload bütçesi, kalite bekçisi
-- **Aşama 3:** Electron masaüstü sürümü (oyun öndeyken çalışan bas-konuş tuşu, `.exe`, otomatik güncelleme)
+- **Aşama 3:** ~~Electron masaüstü sürümü~~ (yapıldı; kalan: exe'nin kendisi için otomatik güncelleme)

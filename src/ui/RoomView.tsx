@@ -8,6 +8,7 @@ import {
   type DragEvent,
   type FormEvent,
 } from 'react'
+import { desktop } from '../core/desktop'
 import { isMobile } from '../core/device'
 import { CHAT_MAX_LENGTH, FILE_MAX_BYTES, MAX_ROOM_SIZE, VOLUME_MAX, VOLUME_MIN } from '../core/limits'
 import { SELF, type CerezRoom, type ChatEntry, type PeerInfo, type RoomState } from '../core/room'
@@ -278,10 +279,15 @@ function usePttKeyboard(room: CerezRoom, enabled: boolean, code: string) {
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     window.addEventListener('blur', release)
+    // Masaüstü uygulamasında tuş, pencere arka plandayken (oyun öndeyken) de çalışır.
+    void desktop?.setPttKey(code)
+    const stopDesktop = desktop?.onPtt((isDown) => room.setPtt(isDown))
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', release)
+      stopDesktop?.()
+      void desktop?.setPttKey(null)
       room.setPtt(false)
     }
   }, [room, enabled, code])
