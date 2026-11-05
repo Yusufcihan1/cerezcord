@@ -54,6 +54,10 @@ export function parse(raw: unknown): Msg | null {
   }
 }
 
+export function normalizeRoomName(name: string) {
+  return name.trim().toLocaleLowerCase('tr').replace(/\s+/g, '-')
+}
+
 export function cleanName(name: string) {
   return name.replace(/\s+/g, ' ').trim().slice(0, NAME_MAX_LENGTH)
 }

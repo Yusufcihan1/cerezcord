@@ -9,9 +9,12 @@ Aynı link hem PC tarayıcısında hem telefon tarayıcısında çalışır; tel
 - Eşleşme (sinyalleşme) [Trystero](https://github.com/dmotz/trystero) ile halka açık Nostr sunucuları üzerinden yapılır.
   Oda şifresi bu mesajları da şifreler.
 - Odaya girmek için **oda adı + şifre** yeterli. Aynı ikisini giren herkes aynı odaya düşer.
-- **Açık oda** seçilirse şifre gerekmez: oda adını bilen herkes girer (`.../#/acik/oda-adi`).
+- **Açık odalar:** isteyen şifresiz bir açık oda kurar; oda "Açık odalar" listesinde adı, doluluğu
+  (ör. 3/6) ve içindekilerin adlarıyla görünür, isteyen tıklayıp girer (`.../#/acik/oda-adi`).
+  Liste için sunucu yok: odadaki en eski kişi odayı 30 sn'de bir halka açık Nostr sunucularına ilan
+  eder (`src/core/lobby.ts`); ilanı yenilenmeyen oda ~75 sn içinde, son kişi çıkınca hemen listeden düşer.
   Açık odalar şifreli odalardan ayrı bir ad alanındadır; aynı adlı şifreli odayla karışmaz.
-  Ses yine doğrudan ve şifreli gider, yalnız eşleşme mesajları şifrelenmez.
+  Ses yine doğrudan ve şifreli gider; oda adı ve içindekilerin adları ise herkese açıktır.
 
 ## Özellikler (Aşama 1)
 

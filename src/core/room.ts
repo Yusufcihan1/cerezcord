@@ -13,7 +13,8 @@ import {
   PING_INTERVAL_MS,
 } from './limits'
 import { getMicrophone, micErrorMessage } from './media'
-import { PROTOCOL_VERSION, parse, type Msg } from './protocol'
+import { ANNOUNCE_INTERVAL_MS, LobbyAnnouncer } from './lobby'
+import { PROTOCOL_VERSION, normalizeRoomName, parse, type Msg } from './protocol'
 import { loadVolumes, saveVolumes, type Settings, type VoiceMode } from './storage'
 
 export type PeerInfo = {
@@ -70,10 +71,6 @@ export type JoinOptions = {
 
 export const SELF = LOCAL
 
-export function normalizeRoomName(name: string) {
-  return name.trim().toLocaleLowerCase('tr').replace(/\s+/g, '-')
-}
-
 /**
  * Bir sesli odanın tüm yaşam döngüsü: P2P bağlantılar, mikrofon, protokol, sınırlar.
  * React tarafı yalnızca getState/subscribe ve eylem metodlarını kullanır.
@@ -90,6 +87,10 @@ export class CerezRoom {
   private chatRate = new Map<string, number[]>()
   private pingTimer: number
   private wakeLock: WakeLockSentinel | null = null
+  /** Yalnız açık odada: vitrine ilan */
+  private lobby: LobbyAnnouncer | null = null
+  private announceTimer = 0
+  private announceDebounce = 0
   private disposed = false
 
   /** Mutlaka kullanıcı tıklaması içinde çağrılmalı (ses kilidi + mikrofon izni). */
@@ -189,6 +190,11 @@ export class CerezRoom {
     if (mic) this.audio.setLocal(mic)
     this.applyMicEnabled()
     this.pingTimer = window.setInterval(() => this.measurePings(), PING_INTERVAL_MS)
+    if (opts.isPublic) {
+      this.lobby = new LobbyAnnouncer()
+      this.announceTimer = window.setInterval(() => this.announce(), ANNOUNCE_INTERVAL_MS)
+      this.scheduleAnnounce()
+    }
     document.addEventListener('visibilitychange', this.onVisibility)
     void this.acquireWakeLock()
   }
@@ -264,6 +270,36 @@ export class CerezRoom {
     delete peers[id]
     this.set({ peers })
     if (peer.known) this.pushSystem(`${peer.name} ayrıldı`)
+    this.scheduleAnnounce()
+  }
+
+  // ---------- açık oda vitrini ----------
+
+  /** Odadakiler katılma sırasıyla (yalnız adı bilinenler). Doluluk kuralı da bu sırayı kullanır. */
+  private members() {
+    return [
+      { id: selfId, joinedAt: this.joinedAt, name: this.state.name },
+      ...Object.values(this.state.peers)
+        .filter((p) => p.known)
+        .map((p) => ({ id: p.id, joinedAt: p.joinedAt, name: p.name })),
+    ].sort((a, b) => a.joinedAt - b.joinedAt || (a.id < b.id ? -1 : 1))
+  }
+
+  /** Katılma/ayrılma dalgalarını tek ilanda toplar. */
+  private scheduleAnnounce() {
+    if (!this.lobby) return
+    clearTimeout(this.announceDebounce)
+    this.announceDebounce = window.setTimeout(() => this.announce(), 1500)
+  }
+
+  /** Aynı ilanı herkes atmasın: yalnız odadaki en eski kişi ilan eder. */
+  private announce() {
+    if (!this.lobby || this.disposed) return
+    const members = this.members().slice(0, MAX_ROOM_SIZE)
+    if (members[0].id !== selfId) return
+    void this.lobby
+      .announce({ room: this.state.roomName, count: members.length, names: members.map((m) => m.name) })
+      .catch(() => {})
   }
 
   /** Ses paketleri: düşük bit hızı, yüksek ağ önceliği. Görüntü geldiğinde önce o düşer. */
@@ -314,6 +350,7 @@ export class CerezRoom {
         this.audio.setVolume(peerId, volume)
         if (!peer.known) this.pushSystem(`${msg.name} katıldı`)
         this.enforceCapacity()
+        this.scheduleAnnounce()
         break
       }
       case 'state':
@@ -331,14 +368,8 @@ export class CerezRoom {
    * İlk MAX_ROOM_SIZE kişinin dışında kalan kendiliğinden ayrılır. Sunucu gerekmez.
    */
   private enforceCapacity() {
-    const members = [
-      { id: selfId, joinedAt: this.joinedAt },
-      ...Object.values(this.state.peers)
-        .filter((p) => p.known)
-        .map((p) => ({ id: p.id, joinedAt: p.joinedAt })),
-    ]
+    const members = this.members()
     if (members.length <= MAX_ROOM_SIZE) return
-    members.sort((a, b) => a.joinedAt - b.joinedAt || (a.id < b.id ? -1 : 1))
     const myIndex = members.findIndex((m) => m.id === selfId)
     if (myIndex >= MAX_ROOM_SIZE) void this.leave('full')
   }
@@ -494,6 +525,16 @@ export class CerezRoom {
     if (this.disposed) return
     this.disposed = true
     clearInterval(this.pingTimer)
+    clearInterval(this.announceTimer)
+    clearTimeout(this.announceDebounce)
+    if (this.lobby) {
+      // Son kişi çıkıyorsa oda vitrinden hemen kalksın; değilse yeni en eski kişi ilanı sürdürür.
+      if (reason === 'left' && !Object.values(this.state.peers).some((p) => p.known)) {
+        void this.lobby.announceEmpty(this.state.roomName)
+      } else {
+        this.lobby.close()
+      }
+    }
     document.removeEventListener('visibilitychange', this.onVisibility)
     void this.wakeLock?.release().catch(() => {})
     for (const t of this.mic?.getTracks() ?? []) t.stop()
