@@ -7,7 +7,13 @@ import './index.css'
 import App from './App.tsx'
 
 // Yeni sürüm yayınlanınca, sayfa bir sonraki açılışta kendiliğinden güncellenir.
-registerSW({ immediate: true })
+// Masaüstü (Electron) uygulamasında service worker önbelleği render sürecini çökertiyor
+// (siyah ekran); orada kaydedilmez, eski kayıt varsa silinir.
+if (navigator.userAgent.includes('Electron')) {
+  void navigator.serviceWorker?.getRegistrations().then((regs) => regs.forEach((r) => void r.unregister()))
+} else {
+  registerSW({ immediate: true })
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

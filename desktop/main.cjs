@@ -136,11 +136,27 @@ function createWindow() {
     void win?.loadURL(errorPage('Çerezcord açılamadı. İnternet bağlantını kontrol et.'))
   })
 
+  // Electron 45, sitenin service worker önbelleğini (CacheStorage) açarken render sürecini
+  // öldürüyor ve pencere siyah kalıyor. Masaüstünde service worker kullanılmaz: açılışta
+  // temizlenir, yine çökerse temizleyip bir kez yeniden yüklenir.
+  let crashReloads = 0
+  win.webContents.on('render-process-gone', (_e, details) => {
+    if (details.reason === 'clean-exit' || !win || crashReloads >= 2) return
+    crashReloads++
+    void clearSwStorage().then(() => win?.loadURL(APP_URL))
+  })
+
   win.on('closed', () => {
     win = null
   })
 
-  void win.loadURL(APP_URL)
+  void clearSwStorage().then(() => win?.loadURL(APP_URL))
+}
+
+function clearSwStorage() {
+  return session.defaultSession
+    .clearStorageData({ storages: ['serviceworkers', 'cachestorage'] })
+    .catch(() => {})
 }
 
 app.on('second-instance', () => {
