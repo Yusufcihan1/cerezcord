@@ -13,6 +13,7 @@ import { isMobile } from '../core/device'
 import { CHAT_MAX_LENGTH, FILE_MAX_BYTES, MAX_ROOM_SIZE, VOLUME_MAX, VOLUME_MIN } from '../core/limits'
 import { SELF, type CerezRoom, type ChatEntry, type PeerInfo, type RoomState } from '../core/room'
 import type { Settings } from '../core/storage'
+import { FunButton } from './FunPanel'
 import {
   CookieLogo,
   FileIcon,
@@ -160,6 +161,8 @@ export function RoomView({ room, settings, onOpenSettings, onLeave }: Props) {
           {s.deafened ? <HeadphonesOffIcon /> : <HeadphonesIcon />}
           <span>{s.deafened ? 'Sağır' : 'Kulaklık'}</span>
         </button>
+
+        <FunButton room={room} s={s} />
 
         {s.voiceMode === 'ptt' && !s.micError && <PttButton room={room} down={s.pttDown} keyName={keyLabel(settings.pttKey)} />}
 

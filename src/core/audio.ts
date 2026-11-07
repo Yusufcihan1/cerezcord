@@ -1,3 +1,4 @@
+import { playSfx, type SfxId } from './sfx'
 import { SPEAKING_HOLD_MS, SPEAKING_POLL_MS, SPEAKING_THRESHOLD } from './limits'
 
 type Channel = {
@@ -19,6 +20,7 @@ export const LOCAL = '__local__'
 export class AudioEngine {
   readonly ctx: AudioContext
   private master: GainNode
+  private sfxOut: GainNode
   private channels = new Map<string, Channel>()
   private timer: number
   private speaking = new Set<string>()
@@ -31,6 +33,9 @@ export class AudioEngine {
     void this.ctx.resume()
     this.master = this.ctx.createGain()
     this.master.connect(this.ctx.destination)
+    this.sfxOut = this.ctx.createGain()
+    this.sfxOut.gain.value = 0.6
+    this.sfxOut.connect(this.master)
     this.timer = window.setInterval(() => this.poll(), SPEAKING_POLL_MS)
   }
 
@@ -81,6 +86,12 @@ export class AudioEngine {
   setVolume(peerId: string, pct: number) {
     const ch = this.channels.get(peerId)
     if (ch?.gain) ch.gain.gain.setTargetAtTime(pct / 100, this.ctx.currentTime, 0.02)
+  }
+
+  /** Efekt panosu sesi; sağırken (master kapalı) duyulmaz. */
+  playSfx(id: SfxId) {
+    this.resume()
+    playSfx(this.ctx, this.sfxOut, id)
   }
 
   setDeafened(deafened: boolean) {

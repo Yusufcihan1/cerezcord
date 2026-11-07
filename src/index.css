@@ -800,6 +800,91 @@ input::placeholder {
   box-shadow: 0 0 24px rgb(118 185 0 / 0.5);
 }
 
+/* ---------------- eğlence: ses değiştirici + efekt panosu ---------------- */
+
+.fun {
+  position: relative;
+  display: grid;
+}
+.fun-emoji {
+  font-size: 1rem;
+  line-height: 1;
+  font-family: 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
+}
+.fun-emoji.big {
+  font-size: 1.15rem;
+}
+.ctl.fx-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fun-panel {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: 0.4rem 0.9rem 0.8rem;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-top: 2px solid var(--accent);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.7);
+  z-index: 20;
+}
+.fun-panel h3 {
+  display: flex;
+  justify-content: space-between;
+  margin: 0.7rem 0 0.5rem;
+  font: 600 0.68rem var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.fun-warn {
+  color: var(--yellow);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.fun-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+}
+.fun-chip {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.2rem;
+  font-size: 0.72rem;
+  min-width: 0;
+}
+.fun-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.fun-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+  font-size: 0.78rem;
+}
+.fun-check input {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.fun-check .muted {
+  font-size: 0.7rem;
+}
+
 .badge {
   display: inline-block;
   min-width: 1.2rem;

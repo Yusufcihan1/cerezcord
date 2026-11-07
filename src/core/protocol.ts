@@ -1,4 +1,5 @@
 import type { DeviceKind } from './device'
+import { isSfxId, type SfxId } from './sfx'
 import { CHAT_MAX_LENGTH, NAME_MAX_LENGTH } from './limits'
 
 // Veri kanalı üzerinden giden tüm mesajlar. Karşıdan gelen her şey güvenilmez kabul edilir
@@ -21,7 +22,10 @@ export type StateMsg = { t: 'state'; muted: boolean; deafened: boolean }
 
 export type ChatMsg = { t: 'chat'; id: string; text: string; ts: number }
 
-export type Msg = HelloMsg | StateMsg | ChatMsg
+/** Efekt panosu: yalnız efektin adı gider, ses her kişide üretilir */
+export type SfxMsg = { t: 'sfx'; id: SfxId }
+
+export type Msg = HelloMsg | StateMsg | ChatMsg | SfxMsg
 
 const isStr = (v: unknown): v is string => typeof v === 'string'
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -49,6 +53,8 @@ export function parse(raw: unknown): Msg | null {
       if (!isStr(m.id) || !isStr(m.text) || !isNum(m.ts)) return null
       if (!m.text.trim() || m.text.length > CHAT_MAX_LENGTH) return null
       return { t: 'chat', id: m.id.slice(0, 40), text: m.text, ts: m.ts }
+    case 'sfx':
+      return isSfxId(m.id) ? { t: 'sfx', id: m.id } : null
     default:
       return null
   }

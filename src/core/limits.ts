@@ -30,6 +30,10 @@ export const FILE_RATE_MAX = 5
 export const FILE_INCOMING_MAX = 3
 export const FILE_NAME_MAX_LENGTH = 120
 
+/** Efekt panosu: kişi başı bu süre içinde en fazla bu kadar efekt */
+export const SFX_RATE_WINDOW_MS = 10_000
+export const SFX_RATE_MAX = 4
+
 /** İsim ve oda adı */
 export const NAME_MAX_LENGTH = 24
 export const ROOM_MAX_LENGTH = 32

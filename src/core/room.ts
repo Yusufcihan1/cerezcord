@@ -16,11 +16,15 @@ import {
   FILE_RATE_WINDOW_MS,
   MAX_ROOM_SIZE,
   PING_INTERVAL_MS,
+  SFX_RATE_MAX,
+  SFX_RATE_WINDOW_MS,
 } from './limits'
 import { getMicrophone, micErrorMessage } from './media'
 import { ANNOUNCE_INTERVAL_MS, LobbyAnnouncer } from './lobby'
 import { PROTOCOL_VERSION, normalizeRoomName, parse, type Msg } from './protocol'
-import { loadVolumes, saveVolumes, type Settings, type VoiceMode } from './storage'
+import { sfxInfo, type SfxId } from './sfx'
+import { loadValue, loadVolumes, save, saveVolumes, type Settings, type VoiceMode } from './storage'
+import { VoiceChanger, type VoiceEffect } from './voicefx'
 
 export type PeerInfo = {
   id: string
@@ -93,6 +97,12 @@ export type RoomState = {
   speaking: ReadonlySet<string>
   chat: ChatEntry[]
   notice: string | null
+  /** Ses değiştirici */
+  voiceEffect: VoiceEffect
+  /** Kendi (değişmiş) sesini duy */
+  monitor: boolean
+  /** Başkalarının efekt panosu seslerini çalma */
+  sfxMuted: boolean
 }
 
 export type JoinOptions = {
@@ -121,6 +131,11 @@ export class CerezRoom {
   private sendQueue: Promise<void> = Promise.resolve()
   private audio: AudioEngine
   private mic: MediaStream | null = null
+  private fx: VoiceChanger
+  /** Karşıya giden ses izi: efekt kapalıyken mikrofonun kendisi, açıkken işlenmiş ses */
+  private sentTrack: MediaStreamTrack | null = null
+  private fxBusy: Promise<void> = Promise.resolve()
+  private sfxRate = new Map<string, number[]>()
   private state: RoomState
   private listeners = new Set<() => void>()
   private joinedAt = Date.now()
@@ -178,7 +193,13 @@ export class CerezRoom {
       speaking: new Set(),
       chat: [],
       notice: micError ? 'Mikrofonsuz katıldın: diğerlerini duyabilirsin ama onlar seni duyamaz.' : null,
+      voiceEffect: 'off',
+      monitor: false,
+      sfxMuted: loadValue('sfxMuted', false),
     }
+    this.fx = new VoiceChanger(audio.ctx)
+    this.fx.setSource(mic)
+    this.sentTrack = mic?.getAudioTracks()[0] ?? null
 
     const turnConfig = settings.turnUrl.trim()
       ? [
@@ -306,8 +327,9 @@ export class CerezRoom {
     this.send(this.helloMsg(), id)
     // İlk ping'i beklemeden ölç, kartta "—" uzun süre kalmasın.
     setTimeout(() => this.pingPeer(id), 1000)
-    if (this.mic) {
-      void Promise.all(this.room.addStream(this.mic, { target: id }))
+    const out = this.sendStream()
+    if (out) {
+      void Promise.all(this.room.addStream(out, { target: id }))
         .then(() => this.tuneAudioSenders(id))
         .catch(() => {})
     }
@@ -318,6 +340,7 @@ export class CerezRoom {
     this.audio.remove(id)
     this.chatRate.delete(id)
     this.fileRate.delete(id)
+    this.sfxRate.delete(id)
     for (const [fileId, from] of this.incomingFiles) {
       if (from !== id) continue
       this.incomingFiles.delete(fileId)
@@ -416,6 +439,11 @@ export class CerezRoom {
         if (!this.allowChat(peerId)) return
         this.pushChat({ id: msg.id, kind: 'message', fromId: peerId, name: peer.name, text: msg.text, ts: Date.now() })
         break
+      case 'sfx':
+        if (!peer.known || !this.allowSfx(peerId)) return
+        if (!this.state.sfxMuted) this.audio.playSfx(msg.id)
+        this.pushSfxLine(peer.name, msg.id)
+        break
     }
   }
 
@@ -448,6 +476,79 @@ export class CerezRoom {
     const s = this.state
     const on = !s.muted && !s.deafened && (s.voiceMode === 'vad' || s.pttDown)
     for (const t of this.mic?.getAudioTracks() ?? []) t.enabled = on
+    this.fx.track.enabled = on
+  }
+
+  /** Yeni gelen kişiye gönderilecek akış */
+  private sendStream() {
+    if (!this.sentTrack) return null
+    return this.sentTrack === this.fx.track ? this.fx.stream : this.mic
+  }
+
+  /** Gönderilen izi değiştirir (mikrofon <-> işlenmiş ses); bağlantı yeniden kurulmaz. */
+  private async swapSentTrack(next: MediaStreamTrack) {
+    const prev = this.sentTrack
+    if (!prev || prev === next) return
+    this.sentTrack = next
+    await Promise.all(this.room.replaceTrack(prev, next)).catch(() => {})
+  }
+
+  // ---------- ses değiştirici ----------
+
+  setVoiceEffect(effect: VoiceEffect) {
+    this.set({ voiceEffect: effect })
+    // Hızlı tıklamalarda değişiklikler sırayla uygulanır.
+    this.fxBusy = this.fxBusy.then(async () => {
+      if (this.disposed || this.state.voiceEffect !== effect) return
+      try {
+        await this.fx.setEffect(effect)
+      } catch {
+        this.set({ voiceEffect: 'off' })
+        this.setNotice('Ses değiştirici bu tarayıcıda çalışmadı.')
+        await this.fx.setEffect('off').catch(() => {})
+        effect = 'off'
+      }
+      const raw = this.mic?.getAudioTracks()[0]
+      // Normal seste mikrofon doğrudan gider (ek gecikme yok, telefon arka plana alınınca da çalışır).
+      // Kendini dinlerken de işlenmiş ses lazım; o zaman da karşıya aynısı gider.
+      if (raw) await this.swapSentTrack(effect === 'off' && !this.state.monitor ? raw : this.fx.track)
+    })
+  }
+
+  setMonitor(on: boolean) {
+    this.set({ monitor: on })
+    this.fx.setMonitor(on)
+    this.setVoiceEffect(this.state.voiceEffect)
+  }
+
+  // ---------- efekt panosu ----------
+
+  private allowSfx(id: string) {
+    const now = Date.now()
+    const recent = (this.sfxRate.get(id) ?? []).filter((t) => now - t < SFX_RATE_WINDOW_MS)
+    if (recent.length >= SFX_RATE_MAX) return false
+    recent.push(now)
+    this.sfxRate.set(id, recent)
+    return true
+  }
+
+  /** false dönerse çok sık basıldı. */
+  playSfx(id: SfxId): boolean {
+    if (!this.allowSfx(selfId)) return false
+    this.send({ t: 'sfx', id })
+    this.audio.playSfx(id)
+    this.pushSfxLine(this.state.name, id)
+    return true
+  }
+
+  setSfxMuted(sfxMuted: boolean) {
+    this.set({ sfxMuted })
+    save('sfxMuted', sfxMuted)
+  }
+
+  private pushSfxLine(name: string, id: SfxId) {
+    const s = sfxInfo(id)
+    this.pushSystem(`${name}: ${s.emoji} ${s.label}`)
   }
 
   private broadcastState() {
@@ -496,14 +597,19 @@ export class CerezRoom {
     const newTrack = next.getAudioTracks()[0]
     if (this.mic) {
       const old = this.mic.getAudioTracks()[0]
-      await Promise.all(this.room.replaceTrack(old, newTrack)).catch(() => {})
+      // Efekt açıksa karşıya işlenmiş ses gidiyor; yalnız işleyicinin girişi değişir.
+      if (this.sentTrack === old) await this.swapSentTrack(newTrack)
       this.mic.removeTrack(old)
       this.mic.addTrack(newTrack)
       old.stop()
+      this.fx.setSource(this.mic)
     } else {
       // Mikrofonsuz katılmıştı; şimdi herkese gönder.
       this.mic = next
-      await Promise.all(this.room.addStream(next)).catch(() => {})
+      this.fx.setSource(next)
+      const useFx = this.state.voiceEffect !== 'off' || this.state.monitor
+      this.sentTrack = useFx ? this.fx.track : newTrack
+      await Promise.all(this.room.addStream(this.sendStream()!)).catch(() => {})
       for (const id of Object.keys(this.state.peers)) void this.tuneAudioSenders(id)
     }
     this.audio.setLocal(this.mic)
@@ -706,6 +812,7 @@ export class CerezRoom {
     document.removeEventListener('visibilitychange', this.onVisibility)
     void this.wakeLock?.release().catch(() => {})
     for (const t of this.mic?.getTracks() ?? []) t.stop()
+    this.fx.close()
     this.audio.close()
     for (const c of this.state.chat) if (c.file?.url) URL.revokeObjectURL(c.file.url)
     await this.room.leave().catch(() => {})
