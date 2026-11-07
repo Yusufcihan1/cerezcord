@@ -9,7 +9,9 @@ export const MAX_BOTS = 4
 /** Aynı botun iki konuşması arasında en az bu kadar beklenir */
 const MIN_GAP_MS = 7_000
 /** Kendiliğinden araya girmek için gereken insan mesajı sayısı */
-const CHIME_IN_AFTER = 3
+const CHIME_IN_AFTER = 2
+/** Bot bu kadar süre önce konuştuysa sohbet sürüyor sayılır; gelen söz ona cevaptır */
+const TALK_WINDOW_MS = 45_000
 /** Hiçbir insan konuşmadan botlar kendi aralarında en fazla bu kadar konuşur */
 const MAX_BOT_STREAK = 3
 const HISTORY = 30
@@ -46,10 +48,11 @@ Kurallar:
 
 export type BotLine = { name: string; text: string; bot?: boolean }
 
-export type BotReason = 'mention' | 'join' | 'chime' | 'poke' | 'hello' | 'reply'
+export type BotReason = 'mention' | 'talk' | 'join' | 'chime' | 'poke' | 'hello' | 'reply'
 
 const REASON_TEXT: Record<BotReason, string> = {
   mention: 'Sana seslendiler ya da senden bahsettiler; lafı gediğine koyarak cevap ver.',
+  talk: 'Son satırdaki kişi az önce konuştu, büyük ihtimalle sana. Ona doğrudan, karşılıklı sohbet eder gibi cevap ver; soru sorduysa soruyu cevapla (trolleyerek ama konuyu kaçırmadan).',
   join: 'Odaya biri yeni katıldı; onu yabancı gibi karşıla ve ona bir laf sok.',
   chime: 'Bir süredir sohbeti dinliyorsun; konuşulana laf at ya da birini trolle.',
   poke: 'Seni çağıran söz verdi; odadakilerden birini seç ve onunla güzelce dalga geç.',
@@ -142,6 +145,11 @@ const mentions = (text: string, name: string) => {
     .some((w) => words.some((t) => t === w || (t.startsWith(w) && t.length - w.length <= 4)))
 }
 
+/** Soru kelimeleri ve ayrı yazılan soru ekleri (mı, misin, muyum ...) */
+const QUESTION_WORD = /^((nasıl|nere|niye|neden|niçin|hangi|kaç)\p{L}*|ne|neyi|neyin|neden|kim|kimi|kime|kimin|m[ıiuü](s[ıiuü]n|y[ıiuü]m|s[ıiuü]n[ıiuü]z|y[ıiuü]z|d[ıiuü]r|yd[ıiuü])?)$/u
+const isQuestion = (text: string) =>
+  text.includes('?') || text.toLocaleLowerCase('tr').split(/[^\p{L}]+/u).some((w) => QUESTION_WORD.test(w))
+
 /**
  * Çağıranın botları. Sohbeti dinler, kimin ne zaman konuşacağına karar verir.
  * Botlar sırayla konuşur; insanlar sustuğunda kendi aralarında en fazla MAX_BOT_STREAK söz söyler.
@@ -211,13 +219,19 @@ export class BotCrew {
       return
     }
     this.botStreak = 0
-    const named = [...this.bots.values()].filter((b) => mentions(line.text, b.info.name))
+    const all = [...this.bots.values()]
+    const named = all.filter((b) => mentions(line.text, b.info.name))
     for (const b of named) b.request('mention')
     if (named.length) return
-    for (const b of this.bots.values()) b.heard()
-    // Biri araya girsin: en çok bekleyen bot
-    const ready = [...this.bots.values()].filter((b) => b.sinceLast >= CHIME_IN_AFTER)
-    if (ready.length && Math.random() < 0.55) ready[Math.floor(Math.random() * ready.length)].request('chime')
+    for (const b of all) b.heard()
+    if (!all.length) return
+    // Sesli sohbet: söz büyük ihtimalle son konuşan bota (ya da tek bota) söylendi.
+    const latest = all.reduce((a, b) => (b.lastSpoke > a.lastSpoke ? b : a))
+    const inTalk = Date.now() - latest.lastSpoke < TALK_WINDOW_MS
+    const target = all.length === 1 ? all[0] : inTalk ? latest : all[Math.floor(Math.random() * all.length)]
+    if (isQuestion(line.text) || inTalk) return target.request('talk')
+    // Sohbete dışarıdan laf atsın
+    if (target.sinceLast >= CHIME_IN_AFTER || Math.random() < 0.5) target.request('chime')
   }
 
   joined(name: string) {
@@ -253,8 +267,8 @@ export class BotCrew {
 class BotBrain {
   readonly info: BotInfo
   sinceLast = 0
+  lastSpoke = 0
   private crew: BotCrew
-  private lastSpoke = 0
   private busy = false
   private pending: BotReason | null = null
   private timer = 0
@@ -280,6 +294,7 @@ class BotBrain {
   request(reason: BotReason) {
     if (this.stopped) return
     const weak = (r: BotReason | null) => r === null || r === 'chime' || r === 'reply'
+    // Konuşmayı bölen yeni bir söz gelirse beklemedeki cevap ona göre yeniden zamanlanır.
     if (this.pending && !weak(this.pending) && weak(reason)) return
     this.pending = reason
     this.schedule()
@@ -288,8 +303,10 @@ class BotBrain {
   private schedule() {
     if (this.busy || this.stopped || !this.pending) return
     clearTimeout(this.timer)
-    const gap = this.pending === 'poke' || this.pending === 'mention' ? 2_500 : MIN_GAP_MS
-    const wait = Math.max(800 + Math.random() * 1200, this.lastSpoke + gap - Date.now())
+    const direct = this.pending === 'poke' || this.pending === 'mention' || this.pending === 'talk'
+    const gap = direct ? 1_500 : MIN_GAP_MS
+    // Doğrudan cevapta kısa bekle: kişi cümlesine devam ediyorsa yeni söz zamanlayıcıyı yeniler.
+    const wait = Math.max(direct ? 500 : 800 + Math.random() * 1200, this.lastSpoke + gap - Date.now())
     this.timer = window.setTimeout(() => void this.run(), wait)
   }
 
