@@ -175,7 +175,14 @@ function BotSection({ room, s }: { room: CerezRoom; s: RoomState }) {
       <p className="fun-note muted">
         Bot ses:{' '}
         {s.bridge === 'on' ? (
-          <span className="ok">EMA hazır ✓</span>
+          <>
+            <span className="ok">EMA hazır ✓</span>
+            {s.botEars ? (
+              <span className="ok"> · sesleri duyuyor 🎙️</span>
+            ) : (
+              !s.bridgeStt && <span> · sesleri duyması için köprüyü yeniden başlat</span>
+            )}
+          </>
         ) : (
           <>
             {s.bridge === 'off' ? 'köprü kapalı, tarayıcı sesi kullanılır.' : 'kontrol ediliyor…'}{' '}

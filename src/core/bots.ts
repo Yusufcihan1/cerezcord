@@ -79,7 +79,7 @@ async function askClaude(
     : '(henüz kimse bir şey yazmadı)'
   const user = `Odadakiler: ${people.join(', ') || 'kimse yok'}
 
-Son konuşmalar:
+Son konuşmalar (çoğu sesli konuşmanın yazıya çevrilmişi; birkaç kelime yanlış duyulmuş olabilir, anlamı tahmin et):
 ${transcript}
 
 ${REASON_TEXT[reason]}`
@@ -333,12 +333,15 @@ export async function bridgeSpeak(text: string, pitch: number): Promise<ArrayBuf
   }
 }
 
-export async function bridgeAlive(): Promise<boolean> {
+/** Köprü kapalıysa null; stt: konuşmayı yazıya çevirebiliyor */
+export async function bridgeStatus(): Promise<{ stt: boolean } | null> {
   try {
     const res = await fetch(`${BRIDGE_URL}/durum`, { signal: AbortSignal.timeout(2_000) })
-    return res.ok
+    if (!res.ok) return null
+    const body = await res.json().catch(() => ({}))
+    return { stt: body?.stt === true }
   } catch {
-    return false
+    return null
   }
 }
 

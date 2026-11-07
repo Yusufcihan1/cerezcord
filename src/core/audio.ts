@@ -9,7 +9,11 @@ type Channel = {
   analyser: AnalyserNode
   buf: Float32Array<ArrayBuffer>
   lastLoud: number
+  /** Botlar için ham ses dinleyicisi (yalnız botları çağıranda) */
+  tap?: ScriptProcessorNode
 }
+
+export type EarFn = (id: string, frame: Float32Array, sampleRate: number) => void
 
 export const LOCAL = '__local__'
 
@@ -30,6 +34,8 @@ export class AudioEngine {
   private timer: number
   private speaking = new Set<string>()
   private onSpeakingChange: (speaking: Set<string>) => void
+  private ears: EarFn | null = null
+  private tapSink: GainNode
 
   constructor(onSpeakingChange: (speaking: Set<string>) => void) {
     this.onSpeakingChange = onSpeakingChange
@@ -43,6 +49,10 @@ export class AudioEngine {
     this.sfxOut.connect(this.master)
     this.botOut = this.ctx.createGain()
     this.botOut.connect(this.master)
+    // ScriptProcessor ancak bir çıkışa bağlıyken çalışır; sessiz bir lavaboya akıtılır.
+    this.tapSink = this.ctx.createGain()
+    this.tapSink.gain.value = 0
+    this.tapSink.connect(this.ctx.destination)
     this.timer = window.setInterval(() => this.poll(), SPEAKING_POLL_MS)
   }
 
@@ -80,14 +90,40 @@ export class AudioEngine {
       source.connect(gain)
       gain.connect(this.master)
     }
-    this.channels.set(id, {
+    const ch: Channel = {
       keepAlive,
       source,
       gain,
       analyser,
       buf: new Float32Array(analyser.fftSize),
       lastLoud: 0,
-    })
+    }
+    this.channels.set(id, ch)
+    if (this.ears) this.addTap(id, ch)
+  }
+
+  /** Her kanalın ham sesini (yerel mikrofon dahil) fn'e verir; null kapatır. */
+  setEars(fn: EarFn | null) {
+    this.ears = fn
+    for (const [id, ch] of this.channels) {
+      if (fn && !ch.tap) this.addTap(id, ch)
+      if (!fn && ch.tap) this.dropTap(ch)
+    }
+  }
+
+  private addTap(id: string, ch: Channel) {
+    const tap = this.ctx.createScriptProcessor(4096, 1, 1)
+    tap.onaudioprocess = (e) => this.ears?.(id, e.inputBuffer.getChannelData(0), this.ctx.sampleRate)
+    ch.source.connect(tap)
+    tap.connect(this.tapSink)
+    ch.tap = tap
+  }
+
+  private dropTap(ch: Channel) {
+    if (!ch.tap) return
+    ch.tap.onaudioprocess = null
+    ch.tap.disconnect()
+    ch.tap = undefined
   }
 
   setVolume(peerId: string, pct: number) {
@@ -155,6 +191,7 @@ export class AudioEngine {
     if (!ch) return
     ch.source.disconnect()
     ch.gain?.disconnect()
+    this.dropTap(ch)
     ch.keepAlive.srcObject = null
     this.channels.delete(id)
     if (this.speaking.delete(id)) this.onSpeakingChange(new Set(this.speaking))

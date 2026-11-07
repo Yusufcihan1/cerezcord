@@ -6,7 +6,8 @@ EMA (Türkçe TTS) modelini bir kez yükler ve 127.0.0.1:8790'da küçük bir HT
 Model CPU'da çalışır (oyunda ekran kartına dokunmaz). İş parçacığı sayısı sınırlıdır.
 
   POST /tts   {"text": "...", "pitch": 1.0}  ->  audio/wav (24 kHz, mono, 16 bit)
-  GET  /durum                                ->  {"ok": true, "ses": "ema"}
+  POST /stt   ham PCM (float32, 16 kHz, mono) ->  {"ok": true, "metin": "..."}   (Whisper small, CPU)
+  GET  /durum                                ->  {"ok": true, "ses": "ema", "stt": true}
 """
 
 import io
@@ -36,6 +37,43 @@ TTS = EMA(device="cpu")
 TTS.say("Hazır.", seed=0)  # ilk çağrıdaki gecikmeyi burada öde
 print(f"Hazır ({time.time() - _t:.1f} sn). http://127.0.0.1:{PORT}", flush=True)
 LOCK = threading.Lock()
+
+# Konuşmayı yazıya çevirme (botlar odadakilerin sesini duysun diye). Yoksa köprü yalnız ses üretir.
+STT_RATE = 16_000
+STT_MAX_BYTES = 25 * STT_RATE * 4  # en fazla 25 sn
+STT_LOCK = threading.Lock()
+try:
+    from faster_whisper import WhisperModel  # noqa: E402
+
+    _t = time.time()
+    STT = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
+    print(f"Whisper hazır ({time.time() - _t:.1f} sn).", flush=True)
+except Exception as e:  # noqa: BLE001
+    STT = None
+    print("Whisper yok, botlar sesi duyamaz:", e, flush=True)
+
+# Whisper sessizlikte ya da gürültüde bunları uydurur (altyazı verisinden kalma).
+_HALLUCINATION = re.compile(
+    r"altyaz|abone ol|izlediğiniz için|^\W*(teşekkür ederim|teşekkürler|müzik|alkış)\W*$|devam edecek|www\.|\.com",
+    re.IGNORECASE,
+)
+
+
+def transcribe(pcm: np.ndarray) -> str:
+    with STT_LOCK:
+        segs, _ = STT.transcribe(
+            pcm,
+            language="tr",
+            beam_size=1,
+            vad_filter=True,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.5,
+        )
+        parts = [s.text.strip() for s in segs if s.no_speech_prob < 0.6 and s.avg_logprob > -1.0]
+    text = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    if len(text) < 2 or _HALLUCINATION.search(text):
+        return ""
+    return text[:MAX_TEXT]
 
 _DIGITS = "sıfır bir iki üç dört beş altı yedi sekiz dokuz".split()
 
@@ -97,16 +135,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/durum"):
-            self._json(200, {"ok": True, "ses": "ema"})
+            self._json(200, {"ok": True, "ses": "ema", "stt": STT is not None})
         else:
             self._json(404, {"ok": False})
 
     def do_POST(self):
-        if not self.path.startswith("/tts"):
-            return self._json(404, {"ok": False})
         origin = self.headers.get("Origin")
         if origin and not ALLOWED_ORIGINS.match(origin):
             return self._json(403, {"ok": False})
+        if self.path.startswith("/stt"):
+            return self._stt()
+        if not self.path.startswith("/tts"):
+            return self._json(404, {"ok": False})
         try:
             size = int(self.headers.get("Content-Length", "0"))
             data = json.loads(self.rfile.read(min(size, 8192)) or b"{}")
@@ -129,6 +169,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(wav)))
         self.end_headers()
         self.wfile.write(wav)
+
+    def _stt(self):
+        if STT is None:
+            return self._json(503, {"ok": False, "hata": "whisper yok"})
+        size = int(self.headers.get("Content-Length", "0") or 0)
+        if size <= 0 or size > STT_MAX_BYTES or size % 4:
+            return self._json(400, {"ok": False, "hata": "ses bozuk"})
+        pcm = np.frombuffer(self.rfile.read(size), dtype="<f4").astype(np.float32)
+        t = time.time()
+        try:
+            text = transcribe(pcm)
+        except Exception as e:  # noqa: BLE001
+            print("STT HATA:", e, file=sys.stderr, flush=True)
+            return self._json(500, {"ok": False, "hata": str(e)[:200]})
+        print(f"{time.time() - t:.2f} sn  duydu ({len(pcm) / STT_RATE:.1f} sn): {text[:70]}", flush=True)
+        self._json(200, {"ok": True, "metin": text})
 
     def log_message(self, *args):
         pass

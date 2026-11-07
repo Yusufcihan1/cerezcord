@@ -29,7 +29,8 @@ export type SfxMsg = { t: 'sfx'; id: SfxId }
 export type BotMsg = { t: 'bot'; id: string; bot: string; text: string }
 
 /** Bir kişinin çağırdığı botların listesi; her değişimde ve yeni gelene gönderilir */
-export type BotsMsg = { t: 'bots'; list: { id: string; name: string; voice: string }[] }
+/** ears: botlar odadaki sesleri dinliyor (çağıranın bilgisayarında yazıya çevriliyor) */
+export type BotsMsg = { t: 'bots'; list: { id: string; name: string; voice: string }[]; ears?: boolean }
 
 export type Msg = HelloMsg | StateMsg | ChatMsg | SfxMsg | BotMsg | BotsMsg
 
@@ -77,7 +78,7 @@ export function parse(raw: unknown): Msg | null {
         if (typeof o !== 'object' || o === null || !isStr(o.id) || !isStr(o.name)) return null
         list.push({ id: o.id.slice(0, 40), name: cleanName(o.name) || 'Yabancı', voice: isStr(o.voice) ? o.voice.slice(0, 12) : 'normal' })
       }
-      return { t: 'bots', list }
+      return { t: 'bots', list, ears: m.ears === true }
     }
     default:
       return null

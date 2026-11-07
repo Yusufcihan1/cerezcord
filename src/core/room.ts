@@ -20,6 +20,7 @@ import {
   SFX_RATE_WINDOW_MS,
 } from './limits'
 import { getMicrophone, micErrorMessage } from './media'
+import { Ears } from './ears'
 import { ANNOUNCE_INTERVAL_MS, LobbyAnnouncer } from './lobby'
 import { BOTS_MAX, PROTOCOL_VERSION, normalizeRoomName, parse, parseBotAudioMeta, type Msg } from './protocol'
 import { sfxInfo, type SfxId } from './sfx'
@@ -28,7 +29,7 @@ import { VoiceChanger, type VoiceEffect } from './voicefx'
 import {
   BotCrew,
   MAX_BOTS,
-  bridgeAlive,
+  bridgeStatus,
   bridgeSpeak,
   botVoice,
   hushFallback,
@@ -122,6 +123,9 @@ export type RoomState = {
   botTalking: string | null
   /** Bu bilgisayardaki EMA ses köprüsü: bilinmiyor / açık / kapalı */
   bridge: 'unknown' | 'on' | 'off'
+  /** Köprü konuşmayı yazıya çevirebiliyor; botlarım odadaki sesleri duyuyor */
+  bridgeStt: boolean
+  botEars: boolean
 }
 
 export type RoomBot = { id: string; name: string; voice: string; host: string }
@@ -160,6 +164,10 @@ export class CerezRoom {
   private fxBusy: Promise<void> = Promise.resolve()
   private sfxRate = new Map<string, number[]>()
   private crew: BotCrew | null = null
+  /** Botlar sesleri dinliyor (yalnız çağıranda) */
+  private ears: Ears | null = null
+  /** Başkalarının botları dinliyor mu (bildirimi bir kez göstermek için) */
+  private earsHosts = new Set<string>()
   private botAudioAction: MessageAction<Blob>
   private botRate = new Map<string, number[]>()
   private state: RoomState
@@ -226,6 +234,8 @@ export class CerezRoom {
       botVoice: loadValue('botVoice', true),
       botTalking: null,
       bridge: 'unknown',
+      bridgeStt: false,
+      botEars: false,
     }
     this.fx = new VoiceChanger(audio.ctx)
     this.fx.setSource(mic)
@@ -386,6 +396,8 @@ export class CerezRoom {
   private onPeerLeave(id: string) {
     const peer = this.state.peers[id]
     this.audio.remove(id)
+    this.ears?.forget(id)
+    this.earsHosts.delete(id)
     this.chatRate.delete(id)
     this.fileRate.delete(id)
     this.sfxRate.delete(id)
@@ -513,6 +525,10 @@ export class CerezRoom {
           if (!mine.some((m) => m.id === b.id)) this.pushSystem(`🤖 ${b.name} odaya daldı (${peer.name} çağırdı)`)
         }
         for (const m of mine) if (!bots[m.id]) this.pushSystem(`🤖 ${m.name} gitti`)
+        if (msg.ears && !this.earsHosts.has(peerId)) {
+          this.earsHosts.add(peerId)
+          this.pushSystem(`🎙️ ${peer.name} çağırdığı botlar konuşulanları duyuyor (sesler ${peer.name} bilgisayarında yazıya çevriliyor)`)
+        } else if (!msg.ears) this.earsHosts.delete(peerId)
         this.set({ bots })
         break
       }
@@ -655,7 +671,7 @@ export class CerezRoom {
         },
       )
     } else this.crew.setKey(key)
-    if (this.state.bridge !== 'on') void this.checkBridge()
+    void this.checkBridge()
     const info: BotInfo = { id: crypto.randomUUID(), name: clean, voice }
     this.set({ bots: { ...this.state.bots, [info.id]: { ...info, host: selfId } } })
     this.crew.add(info)
@@ -673,13 +689,17 @@ export class CerezRoom {
     this.set({ bots })
     this.broadcastBots()
     this.pushSystem(`🤖 ${bot.name} gitti`)
-    if (this.crew && !this.crew.size) this.crew = null
+    if (this.crew && !this.crew.size) {
+      this.crew = null
+      this.stopEars()
+    }
   }
 
   dismissAllBots() {
     for (const b of Object.values(this.state.bots)) if (b.host === selfId) this.dismissBot(b.id)
     this.crew?.stop()
     this.crew = null
+    this.stopEars()
   }
 
   pokeBot(id: string) {
@@ -702,9 +722,49 @@ export class CerezRoom {
   }
 
   async checkBridge() {
-    const on = await bridgeAlive()
-    this.set({ bridge: on ? 'on' : 'off' })
-    return on
+    const st = await bridgeStatus()
+    this.set({ bridge: st ? 'on' : 'off', bridgeStt: !!st?.stt })
+    if (st?.stt && this.crew?.size && !this.ears && !this.disposed) this.startEars()
+    return !!st
+  }
+
+  /** Botlar odadaki konuşmaları duysun: her ses köprüde (Whisper) yazıya çevrilir. */
+  private startEars() {
+    this.ears = new Ears((id, text) => this.heardVoice(id, text))
+    this.audio.setEars(this.ears.feed)
+    this.set({ botEars: true })
+    this.broadcastBots()
+    this.pushSystem('🎙️ Botlar artık konuşulanları duyuyor (sesler senin bilgisayarında yazıya çevriliyor)')
+  }
+
+  private stopEars() {
+    if (!this.ears) return
+    this.audio.setEars(null)
+    this.ears.stop()
+    this.ears = null
+    this.set({ botEars: false })
+  }
+
+  private heardVoice(id: string, text: string) {
+    if (!this.crew?.size) return
+    const name = id === LOCAL ? this.state.name : this.state.peers[id]?.known ? this.state.peers[id].name : null
+    if (!name || this.isBotEcho(text)) return
+    this.crew.hear({ name, text })
+  }
+
+  /** Hoparlörden mikrofona kaçan bot sesi: son bot sözleriyle kelimelerin çoğu aynıysa yok say. */
+  private isBotEcho(text: string) {
+    const words = (s: string) => new Set(s.toLocaleLowerCase('tr').split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2))
+    const heard = words(text)
+    if (!heard.size) return true
+    const since = Date.now() - 30_000
+    return this.state.chat.some((c) => {
+      if (c.kind !== 'bot' || c.ts < since) return false
+      const said = words(c.text)
+      let same = 0
+      for (const w of heard) if (said.has(w)) same++
+      return same / heard.size >= 0.6
+    })
   }
 
   private broadcastBots(target?: string) {
@@ -712,7 +772,7 @@ export class CerezRoom {
       .filter((b) => b.host === selfId)
       .slice(0, BOTS_MAX)
       .map(({ id, name, voice }) => ({ id, name, voice }))
-    this.send({ t: 'bots', list }, target)
+    this.send({ t: 'bots', list, ears: !!this.ears && list.length > 0 }, target)
   }
 
   /** Botumun sözü: köprüde seslendir, herkese gönder, burada da çal. */
@@ -1030,6 +1090,7 @@ export class CerezRoom {
     for (const t of this.mic?.getTracks() ?? []) t.stop()
     this.crew?.stop()
     this.crew = null
+    this.stopEars()
     this.audio.stopClips()
     hushFallback()
     this.fx.close()
