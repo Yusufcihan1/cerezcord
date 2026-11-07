@@ -884,6 +884,80 @@ input::placeholder {
 .fun-check .muted {
   font-size: 0.7rem;
 }
+.fun-row {
+  display: flex;
+  gap: 0.4rem;
+}
+.fun-row > * {
+  flex: 1;
+  min-width: 0;
+}
+.fun-row input {
+  flex: 3;
+}
+.fun-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.linkish {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.bot-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.bot-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid #ff7ab8;
+}
+.bot-list li.talking {
+  background: rgb(255 122 184 / 0.1);
+}
+.bot-list .bot-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.bot-list .fun-chip {
+  flex: none;
+  padding: 0.3rem 0.5rem;
+}
+.bot-form {
+  display: grid;
+  gap: 0.4rem;
+}
+.bot-form select {
+  flex: 1.3;
+}
+.fun-note .ok {
+  color: var(--green, #5ee08f);
+}
+.tile.bot {
+  border-color: rgb(255 122 184 / 0.45);
+}
+.messages li.bot {
+  border-left-color: #ff7ab8;
+  background: rgb(255 122 184 / 0.06);
+  padding: 0.3rem 0.6rem;
+}
 
 .badge {
   display: inline-block;

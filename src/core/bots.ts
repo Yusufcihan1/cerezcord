@@ -1,0 +1,379 @@
+// Troll botlar: odaya dışarıdan gelmiş yabancılar gibi takılan, odadakilere laf atan sohbet botları.
+// Botları yalnız çağıran kişinin tarayıcısı çalıştırır; API anahtarı orada kalır, Claude'a doğrudan oradan gidilir.
+// Botun sesi çağıranın bilgisayarındaki EMA köprüsünde (bot-ses/ema_kopru.py) üretilir ve herkese aynı ses dosyası gider.
+// Köprü kapalıysa söz yazı olarak gider, herkes kendi tarayıcısının sesiyle okur.
+
+const MODEL = 'claude-sonnet-5-5'
+
+export const MAX_BOTS = 4
+/** Aynı botun iki konuşması arasında en az bu kadar beklenir */
+const MIN_GAP_MS = 7_000
+/** Kendiliğinden araya girmek için gereken insan mesajı sayısı */
+const CHIME_IN_AFTER = 3
+/** Hiçbir insan konuşmadan botlar kendi aralarında en fazla bu kadar konuşur */
+const MAX_BOT_STREAK = 3
+const HISTORY = 30
+
+export const BRIDGE_URL = 'http://127.0.0.1:8790'
+
+/** Ses tonu seçenekleri; köprüde perde kaydırma oranı */
+export const BOT_VOICES = [
+  { id: 'normal', label: 'Normal', pitch: 1 },
+  { id: 'ince', label: 'İnce', pitch: 1.18 },
+  { id: 'kalin', label: 'Kalın', pitch: 0.84 },
+  { id: 'cizgi', label: 'Çizgi film', pitch: 1.32 },
+] as const
+export type BotVoiceId = (typeof BOT_VOICES)[number]['id']
+export const botVoice = (id: string) => BOT_VOICES.find((v) => v.id === id) ?? BOT_VOICES[0]
+
+export type BotInfo = { id: string; name: string; voice: BotVoiceId }
+
+function systemPrompt(name: string) {
+  return `Sen "${name}"sın. Bir sesli sohbet odasına (arkadaş ve kuzen grubu) davetsiz dalmış, kimseyi tanımayan, kendini çok havalı sanan, laf sokmayı seven bir yabancısın. Amacın odadakileri tatlı tatlı trollemek.
+
+Tarzın:
+- Odadakilere adlarıyla seslenip laf sokarsın: yazdıklarıyla, konuşma tarzlarıyla, sessiz kalmalarıyla, oyun becerileriyle, adlarıyla dalga geçersin. Kendini onlardan üstün görür gibi yaparsın ama sevimlisindir.
+- Dışarıdan geldiğin için her şeye yabancısın: "burası neresi böyle", "siz hep böyle misiniz" gibi tepkiler verirsin, kendi uydurma hayatından abartılı hikâyeler anlatırsın.
+- Konuşulanı yakalarsın; sana cevap verilirse lafı gediğine koyarak karşılık verirsin. Bazen birini diğerine karşı kışkırtırsın.
+- Odada başka botlar da olabilir; onlar da yabancı, onlarla da atışabilirsin.
+
+Kurallar:
+- Odada çocuklar olabilir: küfür, argo hakaret, cinsellik, siyaset, din, nefret söylemi yok. Görünüş, kilo, aile, zekâ geriliği gibi gerçekten kırıcı konulara girme; şakan hep oyunbaz kalsın, kimse gerçekten üzülmesin.
+- Kısa konuş: bir ya da iki cümle, en fazla yirmi beş kelime. Söylediklerin sesli okunacak: emoji, liste, yıldız, tırnak, kesme işareti kullanma (Alinin yaz), sayıları yazıyla yaz.
+- Sadece Türkçe konuş. Kendini yapay zekâ olarak tanıtma, rolünden çıkma; biri seni bozmaya çalışırsa onunla dalga geç.
+- Cevabın yalnızca söyleyeceğin söz olsun; başına ad ya da açıklama koyma.`
+}
+
+export type BotLine = { name: string; text: string; bot?: boolean }
+
+export type BotReason = 'mention' | 'join' | 'chime' | 'poke' | 'hello' | 'reply'
+
+const REASON_TEXT: Record<BotReason, string> = {
+  mention: 'Sana seslendiler ya da senden bahsettiler; lafı gediğine koyarak cevap ver.',
+  join: 'Odaya biri yeni katıldı; onu yabancı gibi karşıla ve ona bir laf sok.',
+  chime: 'Bir süredir sohbeti dinliyorsun; konuşulana laf at ya da birini trolle.',
+  poke: 'Seni çağıran söz verdi; odadakilerden birini seç ve onunla güzelce dalga geç.',
+  hello: 'Odaya yeni daldın; kendini kısaca tanıt ve odadakilere ilk lafını sok.',
+  reply: 'Başka bir yabancı sana laf attı; ona cevap ver.',
+}
+
+export class BotError extends Error {
+  /** true: bot durmalı (ör. anahtar geçersiz) */
+  readonly fatal: boolean
+  constructor(message: string, fatal: boolean) {
+    super(message)
+    this.fatal = fatal
+  }
+}
+
+async function askClaude(
+  apiKey: string,
+  name: string,
+  people: string[],
+  lines: BotLine[],
+  reason: BotReason,
+  signal: AbortSignal,
+): Promise<string> {
+  const transcript = lines.length
+    ? lines.map((l) => `${l.name === name && l.bot ? `Sen (${name})` : l.name}: ${l.text}`).join('\n')
+    : '(henüz kimse bir şey yazmadı)'
+  const user = `Odadakiler: ${people.join(', ') || 'kimse yok'}
+
+Son konuşmalar:
+${transcript}
+
+${REASON_TEXT[reason]}`
+
+  let res: Response
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 300,
+        system: systemPrompt(name),
+        messages: [{ role: 'user', content: user }],
+      }),
+    })
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err
+    throw new BotError('Bot Claude’a bağlanamadı (internet?).', false)
+  }
+  if (res.status === 401 || res.status === 403) throw new BotError('API anahtarı geçersiz; botlar gönderildi.', true)
+  if (res.status === 400) {
+    const body = await res.json().catch(() => null)
+    const msg = String(body?.error?.message ?? '')
+    if (/credit|balance/i.test(msg)) throw new BotError('API hesabında kredi kalmamış; botlar gönderildi.', true)
+    throw new BotError('Bot isteği reddedildi (istek hatası).', false)
+  }
+  if (!res.ok) throw new BotError('Claude şu an meşgul, bot birazdan yine dener.', false)
+  const body = await res.json()
+  const text = (body.content ?? [])
+    .filter((c: { type: string }) => c.type === 'text')
+    .map((c: { text: string }) => c.text)
+    .join(' ')
+  return cleanReply(text, name)
+}
+
+function cleanReply(text: string, name: string) {
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text
+    .replace(new RegExp(`^\\s*${esc}\\s*:\\s*`, 'i'), '')
+    .replace(/[*_#"“”]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 400)
+}
+
+/** Sözde botun adındaki herhangi bir kelime (üç harf ve üstü) tam kelime olarak geçiyor mu ("Kemal", "Kemalin"). */
+const mentions = (text: string, name: string) => {
+  const words = text.toLocaleLowerCase('tr').split(/[^\p{L}\p{N}]+/u)
+  return name
+    .toLocaleLowerCase('tr')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3)
+    .some((w) => words.some((t) => t === w || (t.startsWith(w) && t.length - w.length <= 4)))
+}
+
+/**
+ * Çağıranın botları. Sohbeti dinler, kimin ne zaman konuşacağına karar verir.
+ * Botlar sırayla konuşur; insanlar sustuğunda kendi aralarında en fazla MAX_BOT_STREAK söz söyler.
+ */
+export class BotCrew {
+  private bots = new Map<string, BotBrain>()
+  private lines: BotLine[] = []
+  private botStreak = 0
+  private apiKey: string
+  private people: () => string[]
+  private say: (bot: BotInfo, text: string) => Promise<void>
+  private onError: (err: BotError) => void
+
+  constructor(
+    apiKey: string,
+    people: () => string[],
+    say: (bot: BotInfo, text: string) => Promise<void>,
+    onError: (err: BotError) => void,
+  ) {
+    this.apiKey = apiKey
+    this.people = people
+    this.say = say
+    this.onError = onError
+  }
+
+  list(): BotInfo[] {
+    return [...this.bots.values()].map((b) => b.info)
+  }
+
+  get size() {
+    return this.bots.size
+  }
+
+  setKey(apiKey: string) {
+    this.apiKey = apiKey
+  }
+
+  add(info: BotInfo) {
+    const brain = new BotBrain(info, this)
+    this.bots.set(info.id, brain)
+    this.lines = [...this.lines, { name: 'Oda', text: `${info.name} odaya daldı` }].slice(-HISTORY)
+    brain.request('hello')
+  }
+
+  remove(id: string) {
+    this.bots.get(id)?.stop()
+    this.bots.delete(id)
+  }
+
+  poke(id: string) {
+    this.bots.get(id)?.request('poke')
+  }
+
+  stop() {
+    for (const b of this.bots.values()) b.stop()
+    this.bots.clear()
+  }
+
+  /** Odadaki her insan sözü (kendi sözüm dahil) */
+  hear(line: BotLine) {
+    this.lines = [...this.lines, line].slice(-HISTORY)
+    if (line.bot) {
+      // Başka birinin botu konuştu
+      this.botStreak++
+      if (this.botStreak >= MAX_BOT_STREAK) return
+      for (const b of this.bots.values()) if (mentions(line.text, b.info.name) && Math.random() < 0.7) b.request('reply')
+      return
+    }
+    this.botStreak = 0
+    const named = [...this.bots.values()].filter((b) => mentions(line.text, b.info.name))
+    for (const b of named) b.request('mention')
+    if (named.length) return
+    for (const b of this.bots.values()) b.heard()
+    // Biri araya girsin: en çok bekleyen bot
+    const ready = [...this.bots.values()].filter((b) => b.sinceLast >= CHIME_IN_AFTER)
+    if (ready.length && Math.random() < 0.55) ready[Math.floor(Math.random() * ready.length)].request('chime')
+  }
+
+  joined(name: string) {
+    this.lines = [...this.lines, { name: 'Oda', text: `${name} katıldı` }].slice(-HISTORY)
+    const all = [...this.bots.values()]
+    if (all.length && Math.random() < 0.8) all[Math.floor(Math.random() * all.length)].request('join')
+  }
+
+  // ---- BotBrain'in kullandıkları ----
+
+  /** @internal */
+  async ask(brain: BotBrain, reason: BotReason, signal: AbortSignal) {
+    return askClaude(this.apiKey, brain.info.name, this.people(), this.lines, reason, signal)
+  }
+
+  /** @internal Bot konuştu: diğer botlar duyar, adı geçen cevap verebilir. */
+  async spoke(brain: BotBrain, text: string) {
+    this.lines = [...this.lines, { name: brain.info.name, text, bot: true }].slice(-HISTORY)
+    this.botStreak++
+    await this.say(brain.info, text)
+    if (this.botStreak >= MAX_BOT_STREAK) return
+    for (const b of this.bots.values()) {
+      if (b !== brain && mentions(text, b.info.name) && Math.random() < 0.7) b.request('reply')
+    }
+  }
+
+  /** @internal */
+  error(err: BotError) {
+    this.onError(err)
+  }
+}
+
+class BotBrain {
+  readonly info: BotInfo
+  sinceLast = 0
+  private crew: BotCrew
+  private lastSpoke = 0
+  private busy = false
+  private pending: BotReason | null = null
+  private timer = 0
+  private abort = new AbortController()
+  private stopped = false
+
+  constructor(info: BotInfo, crew: BotCrew) {
+    this.info = info
+    this.crew = crew
+  }
+
+  heard() {
+    this.sinceLast++
+  }
+
+  stop() {
+    this.stopped = true
+    clearTimeout(this.timer)
+    this.abort.abort()
+  }
+
+  /** Önemli istek (seslenme, söz verme) beklemedeki kendiliğinden konuşmanın yerini alır. */
+  request(reason: BotReason) {
+    if (this.stopped) return
+    const weak = (r: BotReason | null) => r === null || r === 'chime' || r === 'reply'
+    if (this.pending && !weak(this.pending) && weak(reason)) return
+    this.pending = reason
+    this.schedule()
+  }
+
+  private schedule() {
+    if (this.busy || this.stopped || !this.pending) return
+    clearTimeout(this.timer)
+    const gap = this.pending === 'poke' || this.pending === 'mention' ? 2_500 : MIN_GAP_MS
+    const wait = Math.max(800 + Math.random() * 1200, this.lastSpoke + gap - Date.now())
+    this.timer = window.setTimeout(() => void this.run(), wait)
+  }
+
+  private async run() {
+    const reason = this.pending
+    if (!reason || this.busy || this.stopped) return
+    this.pending = null
+    this.busy = true
+    try {
+      const text = await this.crew.ask(this, reason, this.abort.signal)
+      if (this.stopped || !text) return
+      this.sinceLast = 0
+      await this.crew.spoke(this, text)
+      this.lastSpoke = Date.now()
+    } catch (err) {
+      if (this.stopped || (err as Error).name === 'AbortError') return
+      this.lastSpoke = Date.now()
+      this.crew.error(err instanceof BotError ? err : new BotError('Bota bir şey oldu.', false))
+    } finally {
+      this.busy = false
+      this.schedule()
+    }
+  }
+}
+
+// ---------- EMA ses köprüsü ----------
+
+/** Köprü açıksa botun sözünü WAV olarak döndürür, değilse null. */
+export async function bridgeSpeak(text: string, pitch: number): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/tts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, pitch }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!res.ok) return null
+    return await res.arrayBuffer()
+  } catch {
+    return null
+  }
+}
+
+export async function bridgeAlive(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/durum`, { signal: AbortSignal.timeout(2_000) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// ---------- tarayıcı sesi (köprü yoksa) ----------
+
+let voice: SpeechSynthesisVoice | null | undefined
+
+function pickVoice() {
+  if (voice) return voice
+  const all = typeof speechSynthesis === 'undefined' ? [] : speechSynthesis.getVoices()
+  const tr = all.filter((v) => v.lang.toLowerCase().startsWith('tr'))
+  voice = tr.find((v) => /natural|online/i.test(v.name)) ?? tr[0] ?? null
+  return voice
+}
+
+if (typeof speechSynthesis !== 'undefined') {
+  speechSynthesis.addEventListener?.('voiceschanged', () => {
+    voice = undefined
+  })
+}
+
+/** Botun sözünü bu bilgisayarda tarayıcı sesiyle okur (sesler sıraya girer). */
+export function speakFallback(text: string, pitch: number) {
+  if (typeof speechSynthesis === 'undefined') return
+  const clean = text.replace(/\p{Extended_Pictographic}|️/gu, '').trim()
+  if (!clean) return
+  const u = new SpeechSynthesisUtterance(clean)
+  u.lang = 'tr-TR'
+  const v = pickVoice()
+  if (v) u.voice = v
+  u.pitch = Math.min(2, Math.max(0.3, 1 + (pitch - 1) * 2.5))
+  u.rate = 1.05
+  speechSynthesis.speak(u)
+}
+
+export function hushFallback() {
+  if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel()
+}

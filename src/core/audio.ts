@@ -21,6 +21,11 @@ export class AudioEngine {
   readonly ctx: AudioContext
   private master: GainNode
   private sfxOut: GainNode
+  private botOut: GainNode
+  /** Bot sesleri üst üste binmesin diye sırayla çalar */
+  private clipChain: Promise<void> = Promise.resolve()
+  private clipGen = 0
+  private clipNow: AudioBufferSourceNode | null = null
   private channels = new Map<string, Channel>()
   private timer: number
   private speaking = new Set<string>()
@@ -36,6 +41,8 @@ export class AudioEngine {
     this.sfxOut = this.ctx.createGain()
     this.sfxOut.gain.value = 0.6
     this.sfxOut.connect(this.master)
+    this.botOut = this.ctx.createGain()
+    this.botOut.connect(this.master)
     this.timer = window.setInterval(() => this.poll(), SPEAKING_POLL_MS)
   }
 
@@ -94,6 +101,51 @@ export class AudioEngine {
     playSfx(this.ctx, this.sfxOut, id)
   }
 
+  /**
+   * Bot sesini sıraya koyar. Sıradakiler bitince çalar; sağırken (master kapalı) duyulmaz.
+   * onStart/onEnd konuşma göstergesi içindir.
+   */
+  playClip(data: ArrayBuffer, onStart: () => void, onEnd: () => void) {
+    const gen = this.clipGen
+    const decoded = this.ctx.decodeAudioData(data.slice(0))
+    decoded.catch(() => {})
+    this.clipChain = this.clipChain.then(async () => {
+      let buf: AudioBuffer
+      try {
+        buf = await decoded
+      } catch {
+        return
+      }
+      if (gen !== this.clipGen || this.ctx.state === 'closed') return
+      this.resume()
+      const src = this.ctx.createBufferSource()
+      src.buffer = buf
+      src.connect(this.botOut)
+      this.clipNow = src
+      onStart()
+      await new Promise<void>((done) => {
+        src.onended = () => done()
+        src.start()
+      })
+      if (this.clipNow === src) this.clipNow = null
+      onEnd()
+    })
+  }
+
+  /** Çalan ve sıradaki bot seslerini atar */
+  stopClips() {
+    this.clipGen++
+    try {
+      this.clipNow?.stop()
+    } catch {
+      /* zaten bitti */
+    }
+  }
+
+  setBotVolume(pct: number) {
+    this.botOut.gain.setTargetAtTime(pct / 100, this.ctx.currentTime, 0.02)
+  }
+
   setDeafened(deafened: boolean) {
     this.master.gain.setTargetAtTime(deafened ? 0 : 1, this.ctx.currentTime, 0.02)
   }
@@ -129,6 +181,7 @@ export class AudioEngine {
 
   close() {
     clearInterval(this.timer)
+    this.stopClips()
     for (const id of [...this.channels.keys()]) this.remove(id)
     void this.ctx.close()
   }
