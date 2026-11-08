@@ -3,7 +3,7 @@
 EMA (Türkçe TTS) modelini bir kez yükler ve 127.0.0.1:8790'da küçük bir HTTP sunucusu açar.
 Çerezcord sayfası botun sözünü buraya gönderir, WAV alır ve odadaki herkese yollar.
 
-Model CPU'da çalışır (oyunda ekran kartına dokunmaz). İş parçacığı sayısı sınırlıdır.
+Ses ekran kartında üretilir (cümle başına ~0,05-0,1 sn, ~80 MB VRAM); kart yoksa ya da hata verirse CPU'ya geçer.
 
   POST /tts   {"text": "...", "pitch": 1.0}  ->  audio/wav (24 kHz, mono, 16 bit)
   POST /stt   ham PCM (float32, 16 kHz, mono) ->  {"ok": true, "metin": "..."}   (Whisper small, CPU)
@@ -30,13 +30,33 @@ ALLOWED_ORIGINS = re.compile(r"^(https://yusufcihan1\.github\.io|http://(localho
 
 torch.set_num_threads(4)
 
-print("EMA yükleniyor (CPU)...", flush=True)
-_t = time.time()
 from ema_lightning import EMA  # noqa: E402
 
-TTS = EMA(device="cpu")
-TTS.say("Hazır.", seed=0)  # ilk çağrıdaki gecikmeyi burada öde
-print(f"Hazır ({time.time() - _t:.1f} sn). http://127.0.0.1:{PORT}", flush=True)
+# Evrişimlerin en hızlı yolunu bir kez ölçüp saklar (EMA'nın çözücüsü baştan sona evrişim).
+torch.backends.cudnn.benchmark = True
+
+
+def _load_tts(gpu: bool):
+    tts = EMA(device="cuda" if gpu else "cpu")
+    # Isınma: ilk çağrıların gecikmesi ve cudnn ölçümü burada ödenir (kısa ve uzun cümle).
+    for warm in ("Hazır.", "Bugün ne yaptın bakalım, anlat hadi.", "Bence sen yine oyunda kaybettin ve bize söylemiyorsun."):
+        tts.say(warm, seed=0, sample_rate=RATE)
+    return tts
+
+
+TTS = None
+TTS_GPU = False
+for _gpu in (True, False) if torch.cuda.is_available() else (False,):
+    try:
+        _t = time.time()
+        TTS = _load_tts(_gpu)
+        TTS_GPU = _gpu
+        print(f"EMA hazır ({'ekran kartı' if _gpu else 'CPU'}, {time.time() - _t:.1f} sn). http://127.0.0.1:{PORT}", flush=True)
+        break
+    except Exception as e:  # noqa: BLE001
+        print(f"EMA {'ekran kartında' if _gpu else 'CPU da'} açılamadı:", str(e)[:150], flush=True)
+if TTS is None:
+    sys.exit("EMA yüklenemedi.")
 LOCK = threading.Lock()
 
 # Konuşmayı yazıya çevirme (botlar odadakilerin sesini duysun diye). Yoksa köprü yalnız ses üretir.
@@ -126,9 +146,18 @@ def clean(text: str) -> str:
 
 def synth(text: str, pitch: float) -> bytes:
     pitch = min(1.35, max(0.75, pitch))
+    global TTS, TTS_GPU
     with LOCK:
         # Perdeyi kaydırırken süreyi korumak için önce o oranda yavaş/hızlı üret, sonra yeniden örnekle.
-        speech = TTS.say(text, speed=1.0 / pitch, seed=None, sample_rate=RATE)
+        try:
+            speech = TTS.say(text, speed=1.0 / pitch, seed=None, sample_rate=RATE)
+        except Exception as e:  # noqa: BLE001
+            if not TTS_GPU:
+                raise
+            # Ekran kartında yer kalmadı (oyun vb.): CPU'ya geç ve devam et.
+            print("EMA ekran kartında hata verdi, CPU'ya geçiliyor:", str(e)[:150], flush=True)
+            TTS, TTS_GPU = _load_tts(False), False
+            speech = TTS.say(text, speed=1.0 / pitch, seed=None, sample_rate=RATE)
     audio = np.asarray(speech.audio, dtype=np.float32)
     if abs(pitch - 1.0) > 0.01:
         n = int(len(audio) / pitch)
@@ -173,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/durum"):
-            self._json(200, {"ok": True, "ses": "ema", "stt": STT is not None})
+            self._json(200, {"ok": True, "ses": "ema", "stt": STT is not None, "gpu": {"tts": TTS_GPU, "stt": STT_GPU}})
         else:
             self._json(404, {"ok": False})
 
