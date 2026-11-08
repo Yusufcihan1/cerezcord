@@ -12,6 +12,7 @@ Model CPU'da çalışır (oyunda ekran kartına dokunmaz). İş parçacığı sa
 
 import io
 import json
+import os
 import re
 import sys
 import threading
@@ -42,15 +43,38 @@ LOCK = threading.Lock()
 STT_RATE = 16_000
 STT_MAX_BYTES = 25 * STT_RATE * 4  # en fazla 25 sn
 STT_LOCK = threading.Lock()
-try:
-    from faster_whisper import WhisperModel  # noqa: E402
+# Ekran kartı varsa Whisper orada çalışır (medium ~0,5 sn); yoksa ya da yer kalmadıysa CPU'da small (~2,5 sn).
+# CUDA 12 cuBLAS'ı pip paketinden (nvidia-cublas-cu12), cuDNN'i torch'un klasöründen bulsun.
+for _d in ("nvidia/cublas/bin", "torch/lib"):
+    _p = os.path.join(sys.prefix, "Lib", "site-packages", _d)
+    if os.path.isdir(_p):
+        os.add_dll_directory(_p)
+        os.environ["PATH"] = _p + os.pathsep + os.environ.get("PATH", "")
 
-    _t = time.time()
-    STT = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
-    print(f"Whisper hazır ({time.time() - _t:.1f} sn).", flush=True)
-except Exception as e:  # noqa: BLE001
-    STT = None
-    print("Whisper yok, botlar sesi duyamaz:", e, flush=True)
+
+def _load_stt(gpu: bool):
+    from faster_whisper import WhisperModel
+
+    if gpu:
+        return WhisperModel("medium", device="cuda", compute_type="int8_float16"), "medium, ekran kartı"
+    return WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=8), "small, CPU"
+
+
+STT = None
+STT_GPU = False
+for _gpu in (True, False):
+    try:
+        _t = time.time()
+        STT, _ad = _load_stt(_gpu)
+        STT.transcribe(np.zeros(STT_RATE, dtype=np.float32), language="tr")  # ilk çağrının gecikmesini burada öde
+        STT_GPU = _gpu
+        print(f"Whisper hazır ({_ad}, {time.time() - _t:.1f} sn).", flush=True)
+        break
+    except Exception as e:  # noqa: BLE001
+        STT = None
+        print(f"Whisper {'ekran kartında' if _gpu else 'CPU da'} açılamadı:", str(e)[:150], flush=True)
+if STT is None:
+    print("Whisper yok, botlar sesi duyamaz.", flush=True)
 
 # Whisper sessizlikte ya da gürültüde bunları uydurur (altyazı verisinden kalma).
 _HALLUCINATION = re.compile(
@@ -59,17 +83,31 @@ _HALLUCINATION = re.compile(
 )
 
 
+def _run_stt(pcm: np.ndarray) -> list[str]:
+    segs, _ = STT.transcribe(
+        pcm,
+        language="tr",
+        beam_size=1,
+        vad_filter=True,
+        condition_on_previous_text=False,
+        no_speech_threshold=0.5,
+    )
+    return [s.text.strip() for s in segs if s.no_speech_prob < 0.6 and s.avg_logprob > -1.0]
+
+
 def transcribe(pcm: np.ndarray) -> str:
+    global STT, STT_GPU
     with STT_LOCK:
-        segs, _ = STT.transcribe(
-            pcm,
-            language="tr",
-            beam_size=1,
-            vad_filter=True,
-            condition_on_previous_text=False,
-            no_speech_threshold=0.5,
-        )
-        parts = [s.text.strip() for s in segs if s.no_speech_prob < 0.6 and s.avg_logprob > -1.0]
+        try:
+            parts = _run_stt(pcm)
+        except Exception as e:  # noqa: BLE001
+            if not STT_GPU:
+                raise
+            # Ekran kartında yer kalmadı (oyun vb.): CPU'ya geç ve devam et.
+            print("Whisper ekran kartında hata verdi, CPU'ya geçiliyor:", str(e)[:150], flush=True)
+            STT, _ = _load_stt(False)
+            STT_GPU = False
+            parts = _run_stt(pcm)
     text = re.sub(r"\s+", " ", " ".join(parts)).strip()
     if len(text) < 2 or _HALLUCINATION.search(text):
         return ""

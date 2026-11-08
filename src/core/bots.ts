@@ -306,7 +306,7 @@ class BotBrain {
     const direct = this.pending === 'poke' || this.pending === 'mention' || this.pending === 'talk'
     const gap = direct ? 1_500 : MIN_GAP_MS
     // Doğrudan cevapta kısa bekle: kişi cümlesine devam ediyorsa yeni söz zamanlayıcıyı yeniler.
-    const wait = Math.max(direct ? 500 : 800 + Math.random() * 1200, this.lastSpoke + gap - Date.now())
+    const wait = Math.max(direct ? 200 : 800 + Math.random() * 1200, this.lastSpoke + gap - Date.now())
     this.timer = window.setTimeout(() => void this.run(), wait)
   }
 
