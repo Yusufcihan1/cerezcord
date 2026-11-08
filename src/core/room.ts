@@ -16,6 +16,7 @@ import {
   FILE_RATE_WINDOW_MS,
   MAX_ROOM_SIZE,
   PING_INTERVAL_MS,
+  BRIDGE_CHECK_MS,
   SFX_RATE_MAX,
   SFX_RATE_WINDOW_MS,
 } from './limits'
@@ -180,6 +181,8 @@ export class CerezRoom {
   /** Yalnız açık odada: vitrine ilan (herkeste var, doluluğu en eski kişi ilan eder) */
   private lobby: LobbyAnnouncer | null = null
   private announceTimer = 0
+  /** Botlar odadayken köprü arada bir yoklanır: kapanırsa haber ver, açılırsa yeniden duy */
+  private bridgeTimer = 0
   private announceDebounce = 0
   private disposed = false
 
@@ -672,6 +675,11 @@ export class CerezRoom {
       )
     } else this.crew.setKey(key)
     void this.checkBridge()
+    if (!this.bridgeTimer) {
+      this.bridgeTimer = window.setInterval(() => {
+        if (this.crew?.size) void this.checkBridge()
+      }, BRIDGE_CHECK_MS)
+    }
     const info: BotInfo = { id: crypto.randomUUID(), name: clean, voice }
     this.set({ bots: { ...this.state.bots, [info.id]: { ...info, host: selfId } } })
     this.crew.add(info)
@@ -723,8 +731,14 @@ export class CerezRoom {
 
   async checkBridge() {
     const st = await bridgeStatus()
+    if (this.disposed) return !!st
     this.set({ bridge: st ? 'on' : 'off', bridgeStt: !!st?.stt })
-    if (st?.stt && this.crew?.size && !this.ears && !this.disposed) this.startEars()
+    if (st?.stt && this.crew?.size && !this.ears) this.startEars()
+    else if (!st?.stt && this.ears) {
+      this.stopEars()
+      this.broadcastBots()
+      this.setNotice('Bot ses köprüsü kapandı; botlar artık sesleri duyamıyor. bot-ses klasöründeki Bot Sesi Başlat dosyasını aç.')
+    }
     return !!st
   }
 
@@ -1074,6 +1088,7 @@ export class CerezRoom {
     if (this.disposed) return
     this.disposed = true
     clearInterval(this.pingTimer)
+    clearInterval(this.bridgeTimer)
     clearInterval(this.announceTimer)
     clearTimeout(this.announceDebounce)
     if (this.lobby) {

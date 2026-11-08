@@ -185,7 +185,7 @@ function BotSection({ room, s }: { room: CerezRoom; s: RoomState }) {
           </>
         ) : (
           <>
-            {s.bridge === 'off' ? 'köprü kapalı, tarayıcı sesi kullanılır.' : 'kontrol ediliyor…'}{' '}
+            {s.bridge === 'off' ? 'köprü kapalı: botlar sesleri duyamaz, tarayıcı sesiyle konuşur.' : 'kontrol ediliyor…'}{' '}
             <button type="button" className="linkish" onClick={() => void room.checkBridge()}>
               Yeniden dene
             </button>
