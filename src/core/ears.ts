@@ -50,6 +50,12 @@ export class Ears {
     this.tracks.delete(id)
   }
 
+  /** Konuşma bitti (bas-konuş bırakıldı): sessizliği beklemeden parçayı kes. */
+  flush(id: string) {
+    const tr = this.tracks.get(id)
+    if (tr?.active) this.cut(id, tr)
+  }
+
   /** AudioEngine'den gelen ham ses parçası */
   feed = (id: string, input: Float32Array, sampleRate: number) => {
     if (this.stopped) return

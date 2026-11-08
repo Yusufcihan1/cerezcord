@@ -873,6 +873,8 @@ export class CerezRoom {
     if (this.state.pttDown === down) return
     this.set({ pttDown: down })
     this.applyMicEnabled()
+    // Bas-konuş bırakıldı: bot 0,8 sn sessizliği beklemesin, söz hemen yazıya çevrilsin.
+    if (!down) this.ears?.flush(LOCAL)
   }
 
   async setMicDevice(deviceId: string) {

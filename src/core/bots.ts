@@ -7,11 +7,11 @@ const MODEL = 'claude-sonnet-5-5'
 
 export const MAX_BOTS = 4
 /** Aynı botun iki konuşması arasında en az bu kadar beklenir */
-const MIN_GAP_MS = 7_000
+const MIN_GAP_MS = 4_000
 /** Kendiliğinden araya girmek için gereken insan mesajı sayısı */
 const CHIME_IN_AFTER = 2
 /** Bot bu kadar süre önce konuştuysa sohbet sürüyor sayılır; gelen söz ona cevaptır */
-const TALK_WINDOW_MS = 45_000
+const TALK_WINDOW_MS = 90_000
 /** Hiçbir insan konuşmadan botlar kendi aralarında en fazla bu kadar konuşur */
 const MAX_BOT_STREAK = 3
 const HISTORY = 30
@@ -41,7 +41,7 @@ Tarzın:
 
 Kurallar:
 - Odada çocuklar olabilir: küfür, argo hakaret, cinsellik, siyaset, din, nefret söylemi yok. Görünüş, kilo, aile, zekâ geriliği gibi gerçekten kırıcı konulara girme; şakan hep oyunbaz kalsın, kimse gerçekten üzülmesin.
-- Kısa konuş: bir ya da iki cümle, en fazla yirmi beş kelime. Söylediklerin sesli okunacak: emoji, liste, yıldız, tırnak, kesme işareti kullanma (Alinin yaz), sayıları yazıyla yaz.
+- Kısa konuş: çoğunlukla tek kısa cümle, en fazla iki cümle ve yirmi kelime. Söylediklerin sesli okunacak: emoji, liste, yıldız, tırnak, kesme işareti kullanma (Alinin yaz), sayıları yazıyla yaz.
 - Sadece Türkçe konuş. Kendini yapay zekâ olarak tanıtma, rolünden çıkma; biri seni bozmaya çalışırsa onunla dalga geç.
 - Cevabın yalnızca söyleyeceğin söz olsun; başına ad ya da açıklama koyma.`
 }
@@ -69,6 +69,9 @@ export class BotError extends Error {
   }
 }
 
+/** Hız için düşünme kapalı, düşük çaba. API bunu reddederse düz isteğe geçilir ve öyle kalır. */
+let fastMode = true
+
 async function askClaude(
   apiKey: string,
   name: string,
@@ -76,6 +79,7 @@ async function askClaude(
   lines: BotLine[],
   reason: BotReason,
   signal: AbortSignal,
+  onSentence: (text: string) => void,
 ): Promise<string> {
   const transcript = lines.length
     ? lines.map((l) => `${l.name === name && l.bot ? `Sen (${name})` : l.name}: ${l.text}`).join('\n')
@@ -87,9 +91,8 @@ ${transcript}
 
 ${REASON_TEXT[reason]}`
 
-  let res: Response
-  try {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
+  const request = (fast: boolean) =>
+    fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       signal,
       headers: {
@@ -100,35 +103,88 @@ ${REASON_TEXT[reason]}`
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 300,
+        max_tokens: 160,
+        stream: true,
+        ...(fast ? { thinking: { type: 'between_tools' }, output_config: { effort: 'low' } } : {}),
         system: systemPrompt(name),
         messages: [{ role: 'user', content: user }],
       }),
     })
+
+  const failure = async (res: Response) => {
+    const body = await res.json().catch(() => null)
+    const msg = String(body?.error?.message ?? '')
+    if (/credit|balance/i.test(msg)) return new BotError('API hesabında kredi kalmamış; botlar gönderildi.', true)
+    return null
+  }
+
+  let res: Response
+  try {
+    res = await request(fastMode)
+    if (res.status === 400 && fastMode) {
+      const fatal = await failure(res)
+      if (fatal) throw fatal
+      fastMode = false
+      res = await request(false)
+    }
   } catch (err) {
-    if ((err as Error).name === 'AbortError') throw err
+    if ((err as Error).name === 'AbortError' || err instanceof BotError) throw err
     throw new BotError('Bot Claude’a bağlanamadı (internet?).', false)
   }
   if (res.status === 401 || res.status === 403) throw new BotError('API anahtarı geçersiz; botlar gönderildi.', true)
-  if (res.status === 400) {
-    const body = await res.json().catch(() => null)
-    const msg = String(body?.error?.message ?? '')
-    if (/credit|balance/i.test(msg)) throw new BotError('API hesabında kredi kalmamış; botlar gönderildi.', true)
-    throw new BotError('Bot isteği reddedildi (istek hatası).', false)
+  if (res.status === 400) throw (await failure(res)) ?? new BotError('Bot isteği reddedildi (istek hatası).', false)
+  if (!res.ok || !res.body) throw new BotError('Claude şu an meşgul, bot birazdan yine dener.', false)
+
+  // Akış: her cümle biter bitmez seslendirilmeye gider, bot bütün cevabı beklemez.
+  let full = ''
+  let pending = ''
+  const emit = (part: string) => {
+    const text = cleanReply(part, full ? '' : name)
+    if (!text) return
+    full = full ? `${full} ${text}` : text
+    onSentence(text)
   }
-  if (!res.ok) throw new BotError('Claude şu an meşgul, bot birazdan yine dener.', false)
-  const body = await res.json()
-  const text = (body.content ?? [])
-    .filter((c: { type: string }) => c.type === 'text')
-    .map((c: { text: string }) => c.text)
-    .join(' ')
-  return cleanReply(text, name)
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buf = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += value.replace(/\r\n/g, '\n')
+    let cut: number
+    while ((cut = buf.indexOf('\n\n')) >= 0) {
+      const data = buf
+        .slice(0, cut)
+        .split('\n')
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).trim())
+        .join('')
+      buf = buf.slice(cut + 2)
+      if (!data) continue
+      let ev: { type?: string; delta?: { type?: string; text?: string } }
+      try {
+        ev = JSON.parse(data)
+      } catch {
+        continue
+      }
+      if (ev.type === 'error') throw new BotError('Claude şu an meşgul, bot birazdan yine dener.', false)
+      if (ev.type !== 'content_block_delta' || ev.delta?.type !== 'text_delta') continue
+      pending += ev.delta.text ?? ''
+      // Cümle sonu: . ! ? … ve ardından boşluk
+      let m: RegExpExecArray | null
+      while ((m = /[.!?…]+\s/.exec(pending))) {
+        const end = m.index + m[0].length
+        emit(pending.slice(0, end))
+        pending = pending.slice(end)
+      }
+    }
+  }
+  emit(pending)
+  return full
 }
 
 function cleanReply(text: string, name: string) {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return text
-    .replace(new RegExp(`^\\s*${esc}\\s*:\\s*`, 'i'), '')
+  return (name ? text.replace(new RegExp(`^\\s*${esc}\\s*:\\s*`, 'i'), '') : text)
     .replace(/[*_#"“”]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -229,9 +285,11 @@ export class BotCrew {
     const latest = all.reduce((a, b) => (b.lastSpoke > a.lastSpoke ? b : a))
     const inTalk = Date.now() - latest.lastSpoke < TALK_WINDOW_MS
     const target = all.length === 1 ? all[0] : inTalk ? latest : all[Math.floor(Math.random() * all.length)]
-    if (isQuestion(line.text) || inTalk) return target.request('talk')
+    // Odada tek insan varsa söylediği her şey botlara söylenmiştir.
+    const alone = this.people().filter((p) => !p.endsWith('(yabancı)')).length <= 1
+    if (alone || isQuestion(line.text) || inTalk) return target.request('talk')
     // Sohbete dışarıdan laf atsın
-    if (target.sinceLast >= CHIME_IN_AFTER || Math.random() < 0.5) target.request('chime')
+    if (target.sinceLast >= CHIME_IN_AFTER || Math.random() < 0.8) target.request('chime')
   }
 
   joined(name: string) {
@@ -244,14 +302,20 @@ export class BotCrew {
 
   /** @internal */
   async ask(brain: BotBrain, reason: BotReason, signal: AbortSignal) {
-    return askClaude(this.apiKey, brain.info.name, this.people(), this.lines, reason, signal)
+    // Cümleler geldikçe sırayla seslendirilir: ilk cümle çalarken sonraki seslendiriliyor.
+    let saying = Promise.resolve()
+    const text = await askClaude(this.apiKey, brain.info.name, this.people(), this.lines, reason, signal, (part) => {
+      if (signal.aborted) return
+      saying = saying.then(() => this.say(brain.info, part)).catch(() => {})
+    })
+    return { text, saying }
   }
 
   /** @internal Bot konuştu: diğer botlar duyar, adı geçen cevap verebilir. */
-  async spoke(brain: BotBrain, text: string) {
+  async spoke(brain: BotBrain, text: string, saying: Promise<void>) {
     this.lines = [...this.lines, { name: brain.info.name, text, bot: true }].slice(-HISTORY)
     this.botStreak++
-    await this.say(brain.info, text)
+    await saying
     if (this.botStreak >= MAX_BOT_STREAK) return
     for (const b of this.bots.values()) {
       if (b !== brain && mentions(text, b.info.name) && Math.random() < 0.7) b.request('reply')
@@ -316,10 +380,10 @@ class BotBrain {
     this.pending = null
     this.busy = true
     try {
-      const text = await this.crew.ask(this, reason, this.abort.signal)
+      const { text, saying } = await this.crew.ask(this, reason, this.abort.signal)
       if (this.stopped || !text) return
       this.sinceLast = 0
-      await this.crew.spoke(this, text)
+      await this.crew.spoke(this, text, saying)
       this.lastSpoke = Date.now()
     } catch (err) {
       if (this.stopped || (err as Error).name === 'AbortError') return
