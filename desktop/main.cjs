@@ -3,7 +3,6 @@
 const { app, BrowserWindow, ipcMain, session, shell, Menu } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
-const { spawn } = require('node:child_process')
 
 // Web sürümü güncellendikçe uygulama da güncel kalır; yeni exe gerekmez.
 const APP_URL = process.env.CEREZCORD_URL || 'https://yusufcihan1.github.io/cerezcord/'
@@ -24,75 +23,6 @@ if (!app.requestSingleInstanceLock()) app.quit()
 
 /** @type {BrowserWindow | null} */
 let win = null
-
-// ---------- bot ses köprüsü ----------
-
-// Botları çağıran bilgisayarda yerel ses köprüsü (EMA + Whisper) uygulamayla birlikte açılır,
-// uygulama kapanınca kapanır. Yalnız kullanıcı klasöründe kopru.json varsa:
-//   { "python": "C:\...\python.exe", "script": "C:\...\ema_kopru.py" }
-// Arkadaşların bilgisayarında bu dosya olmadığı için hiçbir şey yapılmaz.
-const BRIDGE_URL = 'http://127.0.0.1:8790/durum'
-/** @type {import('node:child_process').ChildProcess | null} */
-let bridge = null
-let bridgeRestarts = 0
-let quitting = false
-
-function bridgeConfig() {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'kopru.json'), 'utf8'))
-    if (typeof cfg.python === 'string' && typeof cfg.script === 'string' && fs.existsSync(cfg.python) && fs.existsSync(cfg.script)) {
-      return cfg
-    }
-  } catch {
-    /* dosya yok ya da bozuk */
-  }
-  return null
-}
-
-async function bridgeRunning() {
-  try {
-    const res = await fetch(BRIDGE_URL, { signal: AbortSignal.timeout(1500) })
-    return res.ok
-  } catch {
-    return false
-  }
-}
-
-async function startBridge() {
-  const cfg = bridgeConfig()
-  if (!cfg || bridge || quitting || (await bridgeRunning())) return
-  const log = fs.openSync(path.join(app.getPath('userData'), 'kopru.log'), 'a')
-  fs.writeSync(log, `
---- ${new Date().toISOString()} köprü başlatılıyor
-`)
-  bridge = spawn(cfg.python, ['-u', cfg.script], {
-    cwd: path.dirname(cfg.script),
-    windowsHide: true,
-    stdio: ['ignore', log, log],
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-  })
-  bridge.on('exit', (code) => {
-    bridge = null
-    fs.closeSync(log)
-    // Beklenmedik kapanışta birkaç kez yeniden aç (oda açıkken botlar sağır kalmasın).
-    if (!quitting && code !== 0 && bridgeRestarts < 3) {
-      bridgeRestarts++
-      setTimeout(() => void startBridge(), 3000)
-    }
-  })
-  bridge.on('error', () => {
-    bridge = null
-  })
-}
-
-function stopBridge() {
-  quitting = true
-  try {
-    bridge?.kill()
-  } catch {
-    /* zaten kapanmış */
-  }
-}
 
 // ---------- genel bas-konuş tuşu ----------
 
@@ -255,11 +185,9 @@ app.whenReady().then(() => {
 
   startHook()
   createWindow()
-  void startBridge()
 })
 
 app.on('window-all-closed', () => {
-  stopBridge()
   try {
     hook?.uIOhook.stop()
   } catch {

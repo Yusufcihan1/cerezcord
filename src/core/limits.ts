@@ -40,8 +40,6 @@ export const ROOM_MAX_LENGTH = 32
 
 /** Ping ölçüm aralığı */
 export const PING_INTERVAL_MS = 5_000
-/** Botlar odadayken ses köprüsü bu aralıkla yoklanır */
-export const BRIDGE_CHECK_MS = 15_000
 
 /** Konuşma algılama eşiği (0..1 RMS) ve kontrol sıklığı */
 export const SPEAKING_THRESHOLD = 0.02

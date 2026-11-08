@@ -129,13 +129,6 @@ export function RoomView({ room, settings, onOpenSettings, onLeave }: Props) {
             {peers.map((p) => (
               <PeerTile key={p.id} peer={p} speaking={s.speaking.has(p.id)} onVolume={(v) => room.setVolume(p.id, v)} />
             ))}
-            {Object.values(s.bots).map((b) => (
-              <div key={b.id} className={`tile bot ${s.botTalking === b.id ? 'active' : ''}`}>
-                <Avatar name={b.name} speaking={s.botTalking === b.id} />
-                <div className="tile-name">🤖 {b.name}</div>
-                <div className="tile-sub muted">bot · {b.host === s.selfId ? s.name : (s.peers[b.host]?.name ?? '?')}</div>
-              </div>
-            ))}
           </div>
           {peers.length === 0 && (
             <p className="empty muted">
@@ -383,10 +376,9 @@ function Chat({ room, s }: { room: CerezRoom; s: RoomState }) {
               {m.text}
             </li>
           ) : (
-            <li key={m.id} className={m.kind === 'bot' ? 'bot' : m.fromId === s.selfId ? 'mine' : ''}>
+            <li key={m.id} className={m.fromId === s.selfId ? 'mine' : ''}>
               <div className="meta">
                 <strong style={{ color: `hsl(${hue(m.name)} 70% 68%)` }}>
-                  {m.kind === 'bot' && '🤖 '}
                   {m.name}
                 </strong>
                 <time className="muted mono">{timeLabel(m.ts)}</time>
