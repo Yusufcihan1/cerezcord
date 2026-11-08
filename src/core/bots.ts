@@ -3,7 +3,6 @@
 // Botun sesi çağıranın bilgisayarındaki EMA köprüsünde (bot-ses/ema_kopru.py) üretilir ve herkese aynı ses dosyası gider.
 // Köprü kapalıysa söz yazı olarak gider, herkes kendi tarayıcısının sesiyle okur.
 
-const MODEL = 'claude-sonnet-5-5'
 
 export const MAX_BOTS = 4
 /** Aynı botun iki konuşması arasında en az bu kadar beklenir */
@@ -69,8 +68,17 @@ export class BotError extends Error {
   }
 }
 
-/** Hız için düşünme kapalı, düşük çaba. API bunu reddederse düz isteğe geçilir ve öyle kalır. */
-let fastMode = true
+/**
+ * Sohbet için en hızlıdan başlayarak denenen ayarlar. Biri reddedilirse (model yok, ayar desteklenmiyor)
+ * bir sonrakine geçilir ve sayfa açık kaldıkça orada kalınır.
+ * Haiku 5.5'te düşünme kapatılamaz; düşük çabada basit sözlerde hiç düşünmez, düşünürse max_tokens'tan yer.
+ */
+const PROFILES = [
+  { model: 'claude-haiku-5-5', max_tokens: 400, output_config: { effort: 'low' } },
+  { model: 'claude-sonnet-5-5', max_tokens: 160, thinking: { type: 'between_tools' }, output_config: { effort: 'low' } },
+  { model: 'claude-sonnet-5-5', max_tokens: 300 },
+]
+let profile = 0
 
 async function askClaude(
   apiKey: string,
@@ -91,7 +99,7 @@ ${transcript}
 
 ${REASON_TEXT[reason]}`
 
-  const request = (fast: boolean) =>
+  const request = (p: number) =>
     fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       signal,
@@ -102,10 +110,8 @@ ${REASON_TEXT[reason]}`
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 160,
+        ...PROFILES[p],
         stream: true,
-        ...(fast ? { thinking: { type: 'between_tools' }, output_config: { effort: 'low' } } : {}),
         system: systemPrompt(name),
         messages: [{ role: 'user', content: user }],
       }),
@@ -120,12 +126,13 @@ ${REASON_TEXT[reason]}`
 
   let res: Response
   try {
-    res = await request(fastMode)
-    if (res.status === 400 && fastMode) {
-      const fatal = await failure(res)
+    res = await request(profile)
+    // 400: ayar desteklenmiyor, 404: model bu hesapta yok -> bir sonraki ayar
+    while ((res.status === 400 || res.status === 404) && profile < PROFILES.length - 1) {
+      const fatal = res.status === 400 ? await failure(res) : null
       if (fatal) throw fatal
-      fastMode = false
-      res = await request(false)
+      profile++
+      res = await request(profile)
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError' || err instanceof BotError) throw err
